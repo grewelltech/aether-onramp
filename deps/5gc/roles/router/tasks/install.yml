@@ -194,17 +194,6 @@
   when: inventory_hostname in groups['master_nodes']
   become: true
 
-- name: Disable GRO flag on the {{ core_data_iface }} interface
-  command:
-    argv:
-      - ethtool
-      - -K
-      - "{{ core_data_iface }}"
-      - gro
-      - "off"
-  when: inventory_hostname in groups['master_nodes']
-  become: true
-
 - name: check if systemd-networkd is active
   command:
     argv:

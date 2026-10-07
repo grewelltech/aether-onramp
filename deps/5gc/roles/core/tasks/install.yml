@@ -146,6 +146,53 @@
     var: ran_subnet
   when: inventory_hostname in groups['master_nodes']
 
+# The UPF (af_packet mode) drops packets that receive aggregation (GRO,
+# hardware GRO, LRO) has merged beyond the N3 MTU, which collapses
+# downlink TCP. aether-upf-offloads.service turns those offloads off on
+# the UPF's parent interface(s) and every device below them, at boot and
+# on every install (the unit is restarted here). See the comments in
+# templates/aether-upf-offloads.sh. This lives in the core role, not the
+# router role, because it is needed whether or not the host router is
+# deployed.
+- name: set the UPF parent interfaces whose receive offloads are turned off
+  set_fact:
+    upf_offload_ifaces: "{{ [core_data_iface] | unique }}"
+  when: inventory_hostname in groups['master_nodes']
+
+- name: install ethtool
+  apt:
+    name: ethtool
+    state: present
+    update_cache: "{{ not (airgapped.enabled | default(false) | bool) }}"
+  when: inventory_hostname in groups['master_nodes']
+  become: true
+  environment: "{{ proxy_env | combine({'DEBIAN_FRONTEND': 'noninteractive'}) }}"
+
+- name: install /usr/local/sbin/aether-upf-offloads
+  template:
+    src: roles/core/templates/aether-upf-offloads.sh
+    dest: /usr/local/sbin/aether-upf-offloads
+    mode: "0755"
+  when: inventory_hostname in groups['master_nodes']
+  become: true
+
+- name: install aether-upf-offloads.service
+  template:
+    src: roles/core/templates/aether-upf-offloads.service
+    dest: /etc/systemd/system/aether-upf-offloads.service
+    mode: "0644"
+  when: inventory_hostname in groups['master_nodes']
+  become: true
+
+- name: enable and (re)start aether-upf-offloads.service
+  systemd:
+    name: aether-upf-offloads.service
+    daemon_reload: true
+    enabled: true
+    state: restarted
+  when: inventory_hostname in groups['master_nodes']
+  become: true
+
 - name: remove /tmp/sdcore-5g-values.yaml
   file:
     path: "/tmp/sdcore-5g-values.yaml"
