@@ -226,6 +226,24 @@
     dest: "/tmp/sdcore-5g-values.yaml"
   when: inventory_hostname in groups['master_nodes']
 
+# core.helm.extra_values_files (default []): additional values files, relative to
+# ROOT_DIR, rendered as templates and passed to helm after core.values_file, so
+# they override it. Use for chart settings OnRamp does not template (e.g. image
+# overrides) without forking the values template.
+- name: render extra Helm values files
+  template:
+    src: "{{ ROOT_DIR }}/{{ item }}"
+    dest: "/tmp/sdcore-5g-extra-values-{{ idx }}.yaml"
+  loop: "{{ core.helm.extra_values_files | default([]) }}"
+  loop_control:
+    index_var: idx
+  when: inventory_hostname in groups['master_nodes']
+
+- name: collect Helm values files
+  set_fact:
+    sdcore_values_files: "{{ ['/tmp/sdcore-5g-values.yaml'] + (range(core.helm.extra_values_files | default([]) | length) | map('string') | map('regex_replace', '^', '/tmp/sdcore-5g-extra-values-') | map('regex_replace', '$', '.yaml') | list) }}"
+  when: inventory_hostname in groups['master_nodes']
+
 - set_fact:
     local_sd_core_chart_root: "{{ core.helm.chart_ref | regex_replace('^(.*)/.*$', '\\1')  }}"
     local_sd_core_chart_path: "/tmp/sdcore-helm-charts/{{ core.helm.chart_ref | regex_replace('^.*/(.*)$', '\\1') }}"
@@ -375,8 +393,7 @@
         create_namespace: true
         chart_ref: "{{ core.helm.chart_ref if core.helm.local_charts == false else local_sd_core_chart_path }}"
         chart_version: "{{ core.helm.chart_version if core.helm.local_charts == false else omit }}"
-        values_files:
-          - /tmp/sdcore-5g-values.yaml
+        values_files: "{{ sdcore_values_files }}"
         wait: true
         wait_timeout: "5m0s" # Increase wait timeout to allow for longer deployment times in systems with limited compute resources
         force: true
