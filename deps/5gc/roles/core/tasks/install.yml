@@ -171,7 +171,13 @@
 # deployed.
 - name: set the UPF parent interfaces whose receive offloads are turned off
   set_fact:
-    upf_offload_ifaces: "{{ [core_data_iface] | unique }}"
+    upf_offload_ifaces: >-
+      {{
+        [
+          core.upf.access_iface | default(core_data_iface),
+          core.upf.core_iface | default(core_data_iface)
+        ] | unique
+      }}
   when: inventory_hostname in groups['master_nodes']
 
 - name: install ethtool
