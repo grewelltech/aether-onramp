@@ -1,9 +1,14 @@
 ---
 
+# core.router.enabled (default true) controls the host-side router: the access/core
+# macvlans on data_iface, the UE-pool route, the FORWARD rules and the UE NAT.
+# Set it to false when the site network provides N3/N6 routing and NAT itself.
 - name: install 5gc/router
   import_tasks: roles/router/tasks/install.yml
+  when: core.router.enabled | default(true) | bool
   tags: install
 
 - name: uninstall 5gc/router
   import_tasks: roles/router/tasks/uninstall.yml
+  when: core.router.enabled | default(true) | bool
   tags: uninstall
