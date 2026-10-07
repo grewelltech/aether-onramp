@@ -32,7 +32,7 @@ config:
 {% if core.upf.mode == 'dpdk' %}
       resourceName: "intel.com/intel_sriov_vfio_access"
 {% endif %}
-      iface: {{ core.data_iface }}
+      iface: {{ core_data_iface }}
       gateway: {{ access_gw }}
       ip: {{ upf_access_ip }}
     core:
@@ -41,7 +41,7 @@ config:
 {% if core.upf.mode == 'dpdk' %}
       resourceName: "intel.com/intel_sriov_vfio_core"
 {% endif %}
-      iface: {{ core.data_iface }}
+      iface: {{ core_data_iface }}
       gateway: {{ core_gw }}
       ip: {{ upf_core_ip }}
     closedLoop: {{ core.closed_loop | default('false') | lower }}
