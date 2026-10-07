@@ -2,26 +2,37 @@
 
 # TODO: running on master node for now (fix to run on multiple nodes)
 
-# Resolve `core.data_iface` from the default-route interface when it
-# is unset, empty, or left at the legacy placeholder `data`. Empty
-# string is the new shipped default in vars/main.yml and the role
-# defaults; `data` is kept in the trigger set for backward
-# compatibility with older checkouts. `ens18` is NOT treated as a
-# placeholder — on proxmox/QEMU guests it is a legitimate interface
-# name, so an explicit `core.data_iface: ens18` must be honoured.
-# Any other explicit operator value is preserved as-is.
-- name: derive core.data_iface from default-route interface when unset
+# Resolve the data-plane interface into `core_data_iface`, deriving it
+# from the default-route interface when `core.data_iface` is unset,
+# empty, or left at the legacy placeholder `data`. Empty string is the
+# new shipped default in vars/main.yml and the role defaults; `data` is
+# kept in the trigger set for backward compatibility with older
+# checkouts. `ens18` is NOT treated as a placeholder — on proxmox/QEMU
+# guests it is a legitimate interface name, so an explicit
+# `core.data_iface: ens18` must be honoured. Any other explicit
+# operator value is preserved as-is.
+#
+# The result goes into a separate fact rather than back into `core`:
+# the Makefiles pass vars/main.yml with `--extra-vars`, which take
+# precedence over set_fact, so `core.data_iface` cannot be updated in
+# place. Everything below reads `core_data_iface` instead.
+- name: resolve core_data_iface from core.data_iface
   ansible.builtin.set_fact:
-    core: "{{ core | combine({'data_iface': ansible_default_ipv4.interface}) }}"
+    core_data_iface: "{{ core.data_iface | default('') }}"
+
+- name: derive core_data_iface from default-route interface when unset
+  ansible.builtin.set_fact:
+    core_data_iface: "{{ ansible_default_ipv4.interface }}"
   when:
     - inventory_hostname in groups['master_nodes']
     - ansible_default_ipv4.interface is defined
-    - core.data_iface is not defined or core.data_iface in ['', 'data']
+    - core_data_iface in ['', 'data']
 
-- name: validate core.data_iface is set and exists on this host
+- name: validate core_data_iface is set and exists on this host
   ansible.builtin.fail:
     msg: >-
-      core.data_iface (={{ core.data_iface | default('<unset>') | to_json }}) is
+      core.data_iface (={{ core.data_iface | default('<unset>') | to_json }},
+      resolved to {{ core_data_iface | to_json }}) is
       not a valid network interface on this host. Either it was left
       at a placeholder and no IPv4 default route was available to
       derive from, or the configured value does not match any
@@ -30,17 +41,16 @@
       interface name on the target node.
   when:
     - inventory_hostname in groups['master_nodes']
-    - (core.data_iface is not defined)
-      or (core.data_iface in ['', 'data'])
-      or (core.data_iface not in (ansible_interfaces | default([])))
+    - (core_data_iface in ['', 'data'])
+      or (core_data_iface not in (ansible_interfaces | default([])))
 
 - set_fact:
     systemd_network_dir: /etc/systemd/network
     systemd_system_dir: /etc/systemd/system
     router_sysctl_backup_file: /var/lib/aether-5gc-router-sysctl-backup.conf
-    router_data_iface_forwarding_sysctl: net/ipv4/conf/{{ core.data_iface }}/forwarding
+    router_data_iface_forwarding_sysctl: net/ipv4/conf/{{ core_data_iface }}/forwarding
     router_data_iface_forwarding_backup_regexp: >-
-      ^(net\.ipv4\.conf\.{{ core.data_iface | regex_escape }}\.forwarding|net/ipv4/conf/{{ core.data_iface | regex_escape }}/forwarding)=
+      ^(net\.ipv4\.conf\.{{ core_data_iface | regex_escape }}\.forwarding|net/ipv4/conf/{{ core_data_iface | regex_escape }}/forwarding)=
 
 - name: set net.ipv4.conf.all.arp_filter to 1
   ansible.posix.sysctl:
@@ -184,12 +194,12 @@
   when: inventory_hostname in groups['master_nodes']
   become: true
 
-- name: Disable GRO flag on the {{ core.data_iface }} interface
+- name: Disable GRO flag on the {{ core_data_iface }} interface
   command:
     argv:
       - ethtool
       - -K
-      - "{{ core.data_iface }}"
+      - "{{ core_data_iface }}"
       - gro
       - "off"
   when: inventory_hostname in groups['master_nodes']
@@ -212,12 +222,12 @@
     systemd_networkd_active: "{{ (systemd_networkd_state.stdout | default('') | trim) == 'active' }}"
   when: inventory_hostname in groups['master_nodes']
 
-- name: read {{ core.data_iface }} networkctl status
+- name: read {{ core_data_iface }} networkctl status
   command:
     argv:
       - networkctl
       - status
-      - "{{ core.data_iface }}"
+      - "{{ core_data_iface }}"
   register: data_iface_networkctl_status
   changed_when: false
   failed_when: false
@@ -226,7 +236,7 @@
     - systemd_networkd_active
   become: true
 
-- name: derive {{ core.data_iface }}'s active systemd-networkd file via networkctl
+- name: derive {{ core_data_iface }}'s active systemd-networkd file via networkctl
   set_fact:
     data_iface_network_file_networkctl: >-
       {{
@@ -243,14 +253,14 @@
     - inventory_hostname in groups['master_nodes']
     - systemd_networkd_active
 
-- name: find {{ core.data_iface }}'s systemd-networkd file by filename
+- name: find {{ core_data_iface }}'s systemd-networkd file by filename
   find:
     paths:
       - /etc/systemd/network
       - /run/systemd/network
       - /lib/systemd/network
       - /usr/lib/systemd/network
-    patterns: "*{{ core.data_iface }}.network"
+    patterns: "*{{ core_data_iface }}.network"
     recurse: false
     file_type: file
   register: data_iface_network_file_matches
@@ -262,7 +272,7 @@
     - (data_iface_network_file_networkctl | default('') | trim) == ''
   become: true
 
-- name: derive {{ core.data_iface }}'s systemd-networkd file by filename
+- name: derive {{ core_data_iface }}'s systemd-networkd file by filename
   set_fact:
     data_iface_network_file_cmd: >-
       {{
@@ -279,7 +289,7 @@
     - systemd_networkd_active
     - (data_iface_network_file_networkctl | default('') | trim) == ''
 
-- name: set {{ core.data_iface }}'s systemd-networkd filename
+- name: set {{ core_data_iface }}'s systemd-networkd filename
   set_fact:
     data_iface_network_filename: >-
       {{
@@ -298,7 +308,7 @@
     - inventory_hostname in groups['master_nodes']
     - not (systemd_networkd_active | default(false))
 
-- name: resolve {{ core.data_iface }}'s systemd-networkd file path
+- name: resolve {{ core_data_iface }}'s systemd-networkd file path
   find:
     paths:
       - /etc/systemd/network
@@ -316,7 +326,7 @@
     - (data_iface_network_filename | default('') | trim) is match('.*\\.network$')
   become: true
 
-- name: set {{ core.data_iface }}'s systemd-networkd file path
+- name: set {{ core_data_iface }}'s systemd-networkd file path
   set_fact:
     data_iface_network_path: >-
       {{
@@ -331,7 +341,7 @@
     - inventory_hostname in groups['master_nodes']
     - (data_iface_network_filename | default('') | trim) is match('.*\\.network$')
 
-- name: read {{ core.data_iface }}'s systemd-networkd file
+- name: read {{ core_data_iface }}'s systemd-networkd file
   slurp:
     src: "{{ data_iface_network_path | trim }}"
   register: data_iface_network_file_content
@@ -340,26 +350,26 @@
     - (data_iface_network_path | default('') | trim) != ''
   become: true
 
-- name: set whether {{ core.data_iface }} is managed by systemd-networkd
+- name: set whether {{ core_data_iface }} is managed by systemd-networkd
   set_fact:
     data_iface_networkd_managed: >-
       {{
         systemd_networkd_active
         and (data_iface_network_filename | default('') | trim) is match('.*\\.network$')
         and (
-          (core.data_iface in (data_iface_network_filename | default('') | trim))
+          (core_data_iface in (data_iface_network_filename | default('') | trim))
           or (
             (data_iface_network_file_content.content | default('') | b64decode)
-            is regex('(?ms)^\[Match\][^[]*^Name\s*=\s*' ~ (core.data_iface | regex_escape) ~ '\s*$')
+            is regex('(?ms)^\[Match\][^[]*^Name\s*=\s*' ~ (core_data_iface | regex_escape) ~ '\s*$')
           )
         )
       }}
   when: inventory_hostname in groups['master_nodes']
 
-- name: note direct macvlan fallback for {{ core.data_iface }}
+- name: note direct macvlan fallback for {{ core_data_iface }}
   debug:
     msg: >-
-      {{ core.data_iface }} is not managed by systemd-networkd. Falling back to direct macvlan interface setup.
+      {{ core_data_iface }} is not managed by systemd-networkd. Falling back to direct macvlan interface setup.
   when:
     - inventory_hostname in groups['master_nodes']
     - not data_iface_networkd_managed
@@ -402,7 +412,7 @@
   when: inventory_hostname in groups['master_nodes']
   become: true
 
-- name: disable aether-5gc-macvlan.service when systemd-networkd manages {{ core.data_iface }}
+- name: disable aether-5gc-macvlan.service when systemd-networkd manages {{ core_data_iface }}
   systemd:
     name: aether-5gc-macvlan.service
     enabled: false

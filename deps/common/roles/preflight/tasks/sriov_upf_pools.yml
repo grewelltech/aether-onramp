@@ -3,7 +3,7 @@
 # Shared SR-IOV UPF resource-pool preflight for DPDK mode. Imported by both
 # the 5gc/core (built-in UPF) and 5gc/upf (additional UPFs) roles so the
 # built-in and additional-UPF install paths validate identical configuration
-# and cannot drift. Operates on the `core.upf.*` and `core.data_iface` vars,
+# and cannot drift. Operates on the `core.upf.*` and `core_data_iface` vars,
 # which both roles populate.
 - name: validate SR-IOV UPF resource pools and VFs
   block:
@@ -78,14 +78,14 @@
           pool, or names whose normalized forms differ, in
           core.upf.access_resource_name / core.upf.core_resource_name.
 
-    - name: Get number of configured VFs for interface {{ core.data_iface }}
+    - name: Get number of configured VFs for interface {{ core_data_iface }}
       command:
         argv:
           - ip
           - -d
           - link
           - show
-          - "{{ core.data_iface }}"
+          - "{{ core_data_iface }}"
       register: vf_status
       changed_when: false
       failed_when: false
@@ -102,10 +102,10 @@
     # zero-MAC VF on the wrong driver would wrongly fail (it can never be
     # allocated). Discover each VF's bound driver from sysfs; virtfn<N> maps
     # to 'vf <N>' in the 'ip link' output.
-    - name: discover each VF's bound driver on {{ core.data_iface }}
+    - name: discover each VF's bound driver on {{ core_data_iface }}
       ansible.builtin.shell: |
         set -u
-        for d in /sys/class/net/{{ core.data_iface }}/device/virtfn*; do
+        for d in /sys/class/net/{{ core_data_iface }}/device/virtfn*; do
           [ -e "$d" ] || continue
           idx=${d##*/virtfn}
           link=$(readlink "$d/driver" 2>/dev/null || true)
@@ -125,7 +125,7 @@
     # Build the set of VF indices eligible for allocation (bound to
     # vfio-pci) and the set with non-zero MAC addresses, so the assertions
     # below reason only over VFs the chart can actually hand to the UPF.
-    - name: compute vfio-pci-eligible and non-zero-MAC VF sets for {{ core.data_iface }}
+    - name: compute vfio-pci-eligible and non-zero-MAC VF sets for {{ core_data_iface }}
       ansible.builtin.set_fact:
         vf_eligible_indices: >-
           {{ vf_driver_lines.stdout_lines
@@ -149,7 +149,7 @@
     #     the interface can be allocated and leave vfioveth deriving a zero
     #     MAC. Require at least two eligible VFs and that *all* eligible
     #     (vfio-pci-bound) VFs have non-zero MAC addresses.
-    - name: verify the required VF resources are configured on {{ core.data_iface }}
+    - name: verify the required VF resources are configured on {{ core_data_iface }}
       ansible.builtin.assert:
         that:
           - (vf_eligible_indices | length) >= 2
@@ -169,7 +169,7 @@
               and (0 in vf_nonzero_mac_indices) and (1 in vf_nonzero_mac_indices)
             )
         fail_msg: >-
-          DPDK mode requires at least two VFs on {{ core.data_iface | default('') }}
+          DPDK mode requires at least two VFs on {{ core_data_iface | default('') }}
           that are bound to the vfio-pci driver (the only VFs the chart's
           sriov-device-plugin selector exposes) and have non-zero MAC
           addresses. {% if
@@ -185,11 +185,11 @@
           ({{ core.upf.access_resource_name | default('intel.com/intel_sriov_vfio_access') }})
           whose selector exposes every vfio-pci VF on the interface, the
           allocator may hand the UPF any of them, so ALL vfio-pci-bound VFs
-          on {{ core.data_iface | default('') }} must have non-zero MAC
+          on {{ core_data_iface | default('') }} must have non-zero MAC
           addresses. {% endif %}vfio-pci-bound VF indices:
           {{ vf_eligible_indices | default([]) }}; VF indices with non-zero
           MAC: {{ vf_nonzero_mac_indices | default([]) }} (from
-          'ip -d link show {{ core.data_iface | default('') }}' and
-          /sys/class/net/{{ core.data_iface | default('') }}/device/virtfn*/driver).
+          'ip -d link show {{ core_data_iface | default('') }}' and
+          /sys/class/net/{{ core_data_iface | default('') }}/device/virtfn*/driver).
 
   when: inventory_hostname in groups['master_nodes'] and core.upf.mode == "dpdk"

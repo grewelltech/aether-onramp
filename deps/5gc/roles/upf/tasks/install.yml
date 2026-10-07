@@ -1,20 +1,26 @@
 ---
 
-# Resolve `core.data_iface` from the default-route interface when it
-# is unset or left at one of the stock defaults. See the router
-# role's install.yml for the full rationale.
-- name: derive core.data_iface from default-route interface when unset
+# Resolve the data-plane interface into `core_data_iface`, deriving it
+# from the default-route interface when `core.data_iface` is unset or
+# left at one of the stock defaults. See the router role's install.yml
+# for the full rationale.
+- name: resolve core_data_iface from core.data_iface
   ansible.builtin.set_fact:
-    core: "{{ core | combine({'data_iface': ansible_default_ipv4.interface}) }}"
+    core_data_iface: "{{ core.data_iface | default('') }}"
+
+- name: derive core_data_iface from default-route interface when unset
+  ansible.builtin.set_fact:
+    core_data_iface: "{{ ansible_default_ipv4.interface }}"
   when:
     - inventory_hostname in groups['master_nodes']
     - ansible_default_ipv4.interface is defined
-    - core.data_iface is not defined or core.data_iface in ['', 'data']
+    - core_data_iface in ['', 'data']
 
-- name: validate core.data_iface is set and exists on this host
+- name: validate core_data_iface is set and exists on this host
   ansible.builtin.fail:
     msg: >-
-      core.data_iface (={{ core.data_iface | default('<unset>') | to_json }}) is
+      core.data_iface (={{ core.data_iface | default('<unset>') | to_json }},
+      resolved to {{ core_data_iface | to_json }}) is
       not a valid network interface on this host. Either it was left
       at a placeholder and no IPv4 default route was available to
       derive from, or the configured value does not match any
@@ -23,9 +29,8 @@
       interface name on the target node.
   when:
     - inventory_hostname in groups['master_nodes']
-    - (core.data_iface is not defined)
-      or (core.data_iface in ['', 'data'])
-      or (core.data_iface not in (ansible_interfaces | default([])))
+    - (core_data_iface in ['', 'data'])
+      or (core_data_iface not in (ansible_interfaces | default([])))
 
 # kubernetes.core modules used later in this role require the python
 # `kubernetes` client library, which is NOT pulled in by a stock apt
@@ -57,7 +62,7 @@
     name: preflight
     tasks_from: sriov_upf_pools.yml
 
-- name: find {{ core.data_iface }}'s subnet for RAN
+- name: find {{ core_data_iface }}'s subnet for RAN
   command:
     argv:
       - ip
@@ -65,20 +70,20 @@
       - route
       - show
       - dev
-      - "{{ core.data_iface }}"
+      - "{{ core_data_iface }}"
   register: result
   changed_when: false
   failed_when: false
   when: inventory_hostname in groups['master_nodes']
   become: true
 
-- name: verify {{ core.data_iface }}'s subnet can be derived for RAN
+- name: verify {{ core_data_iface }}'s subnet can be derived for RAN
   ansible.builtin.assert:
     that:
       - result.rc == 0
       - (result.stdout_lines | default([]) | select('search', ' proto kernel ') | list | length) > 0
     fail_msg: >-
-      Unable to derive ran_subnet from interface {{ core.data_iface }}.
+      Unable to derive ran_subnet from interface {{ core_data_iface }}.
       Ensure core.data_iface is valid or set core.ran_subnet explicitly.
   when:
     - inventory_hostname in groups['master_nodes']
@@ -188,7 +193,7 @@
     table: nat
     chain: POSTROUTING
     source: "{{ item.value.ue_ip_pool }}"
-    out_interface: "{{ core.data_iface }}"
+    out_interface: "{{ core_data_iface }}"
     jump: MASQUERADE
   when: inventory_hostname in groups['master_nodes']
   with_dict: "{{ core.upf.additional_upfs}}"

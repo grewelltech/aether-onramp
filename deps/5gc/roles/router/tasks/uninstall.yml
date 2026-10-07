@@ -8,14 +8,22 @@
   ansible.builtin.set_fact:
     router_sysctl_backup_file: /var/lib/aether-5gc-router-sysctl-backup.conf
 
+# Resolve the data-plane interface into `core_data_iface` (see
+# install.yml for why this is a separate fact rather than an update
+# of `core`). An explicit `core.data_iface` is used as-is; otherwise
+# it is recovered from the sysctl backup file, and failing that
+# derived from the default-route interface.
+- name: resolve core_data_iface from core.data_iface
+  ansible.builtin.set_fact:
+    core_data_iface: "{{ core.data_iface | default('') }}"
+
 # Recover the install-time data_iface from the sysctl backup file.
 # The backup was written by install.yml in the form
 #     net/ipv4/conf/<install-time-iface>/forwarding=<original-value>
 # Reading it back here guarantees uninstall targets the same
 # interface install used, even if the host's default route has since
-# moved to a different NIC. Operator overrides via vars/main.yml or
-# inventory still win; the auto-derive below only fires if both the
-# explicit override and the backup file are absent/unparseable.
+# moved to a different NIC. Only consulted when `core.data_iface` is
+# left at a placeholder.
 # `become: true`: the backup file is written by install at mode 0600
 # owned by root, so an unprivileged ansible_user can't slurp it.
 - name: read sysctl backup file for install-time data_iface
@@ -27,28 +35,27 @@
   become: true
   when:
     - inventory_hostname in groups['master_nodes']
-    - core.data_iface is not defined or core.data_iface in ['', 'data']
+    - core_data_iface in ['', 'data']
 
-- name: recover core.data_iface from sysctl backup file
+- name: recover core_data_iface from sysctl backup file
   ansible.builtin.set_fact:
-    core: "{{ core | combine({'data_iface':
-      _router_sysctl_backup.content | b64decode
-        | regex_findall('(?m)^net/ipv4/conf/([^/]+)/forwarding=') | first }) }}"
+    core_data_iface: "{{ _router_sysctl_backup.content | b64decode
+      | regex_findall('(?m)^net/ipv4/conf/([^/]+)/forwarding=') | first }}"
   when:
     - inventory_hostname in groups['master_nodes']
-    - core.data_iface is not defined or core.data_iface in ['', 'data']
+    - core_data_iface in ['', 'data']
     - _router_sysctl_backup.content is defined
     - (_router_sysctl_backup.content | b64decode) is regex('(?m)^net/ipv4/conf/[^/]+/forwarding=')
 
 # Mirror the install-time auto-derive when neither an explicit
 # operator value nor the backup-file recovery resolved the interface.
-- name: derive core.data_iface from default-route interface when unset
+- name: derive core_data_iface from default-route interface when unset
   ansible.builtin.set_fact:
-    core: "{{ core | combine({'data_iface': ansible_default_ipv4.interface}) }}"
+    core_data_iface: "{{ ansible_default_ipv4.interface }}"
   when:
     - inventory_hostname in groups['master_nodes']
     - ansible_default_ipv4.interface is defined
-    - core.data_iface is not defined or core.data_iface in ['', 'data']
+    - core_data_iface in ['', 'data']
 
 # Non-fatal in uninstall: cleanup is best-effort (most tasks below
 # use `ignore_errors: yes`), so a hard failure here would block
@@ -57,10 +64,11 @@
 # Surface a warning instead — interface-dependent tasks downstream
 # will fail individually under their existing ignore_errors and the
 # rest of the cleanup still completes.
-- name: warn when core.data_iface cannot be resolved on this host
+- name: warn when core_data_iface cannot be resolved on this host
   ansible.builtin.debug:
     msg: >-
-      WARNING: core.data_iface (={{ core.data_iface | default('<unset>') | to_json }})
+      WARNING: core.data_iface (={{ core.data_iface | default('<unset>') | to_json }},
+      resolved to {{ core_data_iface | to_json }})
       is not a valid network interface on this host. Either it was
       left at a placeholder and no IPv4 default route was available
       to derive from, or the configured value does not match any
@@ -69,16 +77,15 @@
       `core.data_iface` set explicitly to fully clean up.
   when:
     - inventory_hostname in groups['master_nodes']
-    - (core.data_iface is not defined)
-      or (core.data_iface in ['', 'data'])
-      or (core.data_iface not in (ansible_interfaces | default([])))
+    - (core_data_iface in ['', 'data'])
+      or (core_data_iface not in (ansible_interfaces | default([])))
 
 - set_fact:
     systemd_network_dir: /etc/systemd/network
     systemd_system_dir: /etc/systemd/system
-    router_data_iface_forwarding_sysctl: net/ipv4/conf/{{ core.data_iface }}/forwarding
+    router_data_iface_forwarding_sysctl: net/ipv4/conf/{{ core_data_iface }}/forwarding
     router_data_iface_forwarding_backup_regexp: >-
-      ^(net\.ipv4\.conf\.{{ core.data_iface | regex_escape }}\.forwarding|net/ipv4/conf/{{ core.data_iface | regex_escape }}/forwarding)=(.+)$
+      ^(net\.ipv4\.conf\.{{ core_data_iface | regex_escape }}\.forwarding|net/ipv4/conf/{{ core_data_iface | regex_escape }}/forwarding)=(.+)$
 
 - name: delete static route for UE subnet in IMS dnn on master node
   command:
@@ -125,10 +132,10 @@
   become: true
   ignore_errors: yes
 
-- name: "delete iptable rule: forward from {{ core.data_iface }} to access"
+- name: "delete iptable rule: forward from {{ core_data_iface }} to access"
   iptables:
     chain: FORWARD
-    in_interface: "{{ core.data_iface }}"
+    in_interface: "{{ core_data_iface }}"
     out_interface: access
     jump: ACCEPT
     state: absent
@@ -136,21 +143,21 @@
   become: true
   ignore_errors: yes
 
-- name: "delete iptable rule: forward from access to {{ core.data_iface }}"
+- name: "delete iptable rule: forward from access to {{ core_data_iface }}"
   iptables:
     chain: FORWARD
     in_interface: access
-    out_interface: "{{ core.data_iface }}"
+    out_interface: "{{ core_data_iface }}"
     jump: ACCEPT
     state: absent
   when: inventory_hostname in groups['master_nodes'] and core.upf.multihop_gnb == false
   become: true
   ignore_errors: yes
 
-- name: "delete iptable rule: forward from {{ core.data_iface }} to core"
+- name: "delete iptable rule: forward from {{ core_data_iface }} to core"
   iptables:
     chain: FORWARD
-    in_interface: "{{ core.data_iface }}"
+    in_interface: "{{ core_data_iface }}"
     out_interface: core
     jump: ACCEPT
     state: absent
@@ -158,11 +165,11 @@
   become: true
   ignore_errors: yes
 
-- name: "delete iptable rule: forward from core to {{ core.data_iface }}"
+- name: "delete iptable rule: forward from core to {{ core_data_iface }}"
   iptables:
     chain: FORWARD
     in_interface: core
-    out_interface: "{{ core.data_iface }}"
+    out_interface: "{{ core_data_iface }}"
     jump: ACCEPT
     state: absent
   when: inventory_hostname in groups['master_nodes']
@@ -236,12 +243,12 @@
   when: inventory_hostname in groups['master_nodes']
   ignore_errors: yes
 
-- name: read {{ core.data_iface }} networkctl status
+- name: read {{ core_data_iface }} networkctl status
   command:
     argv:
       - networkctl
       - status
-      - "{{ core.data_iface }}"
+      - "{{ core_data_iface }}"
   register: data_iface_networkctl_status
   changed_when: false
   failed_when: false
@@ -250,7 +257,7 @@
   become: true
   ignore_errors: yes
 
-- name: derive {{ core.data_iface }}'s active systemd-networkd file via networkctl
+- name: derive {{ core_data_iface }}'s active systemd-networkd file via networkctl
   set_fact:
     data_iface_network_file_networkctl: >-
       {{
@@ -267,14 +274,14 @@
     - inventory_hostname in groups['master_nodes']
   ignore_errors: yes
 
-- name: find {{ core.data_iface }}'s systemd-networkd file by filename
+- name: find {{ core_data_iface }}'s systemd-networkd file by filename
   find:
     paths:
       - /etc/systemd/network
       - /run/systemd/network
       - /lib/systemd/network
       - /usr/lib/systemd/network
-    patterns: "*{{ core.data_iface }}.network"
+    patterns: "*{{ core_data_iface }}.network"
     recurse: false
     file_type: file
   register: data_iface_network_file_matches
@@ -286,7 +293,7 @@
   become: true
   ignore_errors: yes
 
-- name: derive {{ core.data_iface }}'s systemd-networkd file by filename
+- name: derive {{ core_data_iface }}'s systemd-networkd file by filename
   set_fact:
     data_iface_network_file_cmd: >-
       {{
@@ -303,7 +310,7 @@
     - (data_iface_network_file_networkctl | default('') | trim) == ''
   ignore_errors: yes
 
-- name: set {{ core.data_iface }}'s systemd-networkd filename
+- name: set {{ core_data_iface }}'s systemd-networkd filename
   set_fact:
     data_iface_network_filename: >-
       {{
@@ -413,7 +420,7 @@
     table: nat
     chain: POSTROUTING
     source: "{{ core.upf.default_upf.ue_ip_pool }}"
-    out_interface: "{{ core.data_iface }}"
+    out_interface: "{{ core_data_iface }}"
     jump: MASQUERADE
     state: absent
   when: inventory_hostname in groups['master_nodes']
