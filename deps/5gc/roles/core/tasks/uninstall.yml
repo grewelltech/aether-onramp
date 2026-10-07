@@ -57,3 +57,32 @@
   when: inventory_hostname in groups['master_nodes']
   ignore_errors: yes
 
+# Removing the unit does not turn GRO/LRO back on: the interfaces keep
+# their current settings until they are recreated or the host reboots.
+# The pre-install state is not recorded, and turning offloads back on
+# here could affect other users of the interfaces.
+- name: stop and disable aether-upf-offloads.service
+  systemd:
+    name: aether-upf-offloads.service
+    enabled: false
+    state: stopped
+  when: inventory_hostname in groups['master_nodes']
+  become: true
+  failed_when: false
+
+- name: remove aether-upf-offloads.service and its script
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/aether-upf-offloads.service
+    - /usr/local/sbin/aether-upf-offloads
+  when: inventory_hostname in groups['master_nodes']
+  become: true
+
+- name: reload systemd after removing aether-upf-offloads.service
+  systemd:
+    daemon_reload: true
+  when: inventory_hostname in groups['master_nodes']
+  become: true
+
