@@ -471,7 +471,7 @@ omec-user-plane:
       access:
         ipam: static
         cniPlugin: {{ 'vfioveth' if core.upf.mode == 'dpdk' else 'macvlan' }}
-        iface: {{ core_data_iface }}
+        iface: {{ core.upf.access_iface | default(core_data_iface) }}
 {% if core.upf.mode == 'dpdk' %}
         resourceName: {{ core.upf.access_resource_name | default('intel.com/intel_sriov_vfio_access') | to_json }}
 {% endif %}
@@ -480,7 +480,7 @@ omec-user-plane:
       core:
         ipam: static
         cniPlugin: {{ 'vfioveth' if core.upf.mode == 'dpdk' else 'macvlan' }}
-        iface: {{ core_data_iface }}
+        iface: {{ core.upf.core_iface | default(core_data_iface) }}
 {% if core.upf.mode == 'dpdk' %}
         resourceName: {{ core.upf.core_resource_name | default('intel.com/intel_sriov_vfio_core') | to_json }}
 {% endif %}
