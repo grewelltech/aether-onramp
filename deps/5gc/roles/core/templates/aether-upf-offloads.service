@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Turns off receive aggregation (GRO, rx-gro-hw, LRO) on the UPF's parent
+# interface(s) and every device below them, at boot and on each 5gc core
+# install.
+#
+# The BESS UPF (af_packet mode) silently drops the large packets that
+# receive aggregation builds out of downlink TCP segments: they cannot be
+# GTP-U encapsulated into a 1500-byte N3 frame, so downlink TCP collapses
+# to a few Mbit/s of retransmits. See /usr/local/sbin/aether-upf-offloads
+# for details. ethtool settings do not persist, hence this unit.
+#
+# Stopping or removing this unit does not turn the offloads back on; they
+# return when the interface is recreated or the host reboots.
+
+[Unit]
+Description=Turn off receive offloads on the Aether UPF parent interfaces
+After=network-online.target{% for iface in upf_offload_ifaces %} sys-subsystem-net-devices-{{ iface | replace('-', '\\x2d') }}.device{% endfor %}
+
+Wants=network-online.target{% for iface in upf_offload_ifaces %} sys-subsystem-net-devices-{{ iface | replace('-', '\\x2d') }}.device{% endfor %}
+
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/aether-upf-offloads {{ upf_offload_ifaces | join(' ') }}
+
+[Install]
+WantedBy=multi-user.target
