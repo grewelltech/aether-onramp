@@ -24,3 +24,5 @@ ueransim:
     0:
       gnb: "config/custom-gnb.yaml"
       ue: "config/custom-ue.yaml"
+      # Optional per-node values, see vars/main-ueransim.yml at the top level:
+      # ngap_ip, gtp_ip, link_ip (default gnb.ip), nci, supi.

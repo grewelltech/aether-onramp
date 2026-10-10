@@ -55,6 +55,16 @@ ueransim:
     0:
       gnb: "deps/ueransim/config/custom-gnb.yaml"
       ue: "deps/ueransim/config/custom-ue.yaml"
+      # Per-node values rendered into the stock templates above. Each is
+      # optional and defaults to today's rendering: the three addresses to
+      # gnb.ip, nci to 0x000000010, supi to imsi-001010100007510. Set them to
+      # give one gNB separate N2 and N3 addresses, or to run several nodes
+      # with distinct cell identities and subscribers.
+      # ngap_ip: "10.76.28.111"        # gNB N2 address
+      # gtp_ip: "10.76.28.111"         # gNB N3 address
+      # link_ip: "10.76.28.111"        # radio link address; the UE on the node searches for it
+      # nci: "0x000000010"             # NR Cell Identity (36-bit)
+      # supi: "imsi-001010100007510"   # the node's UE
     # 1:
     #   gnb: "deps/ueransim/config/custom-gnb-1.yaml"
     #   ue: "deps/ueransim/config/custom-ue-1.yaml"
