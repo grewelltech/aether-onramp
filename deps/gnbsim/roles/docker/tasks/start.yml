@@ -9,12 +9,27 @@
   when: inventory_hostname in groups['gnbsim_nodes']
   become: true
 
+# Resolve the macvlan parent the same way the router role does (see
+# roles/router/tasks/install.yml); each make target is a separate
+# ansible-playbook run, so the router role's fact is not available here.
+- name: resolve gnbsim_data_iface from gnbsim.router.data_iface
+  ansible.builtin.set_fact:
+    gnbsim_data_iface: "{{ gnbsim.router.data_iface | default('') }}"
+
+- name: derive gnbsim_data_iface from default-route interface when unset
+  ansible.builtin.set_fact:
+    gnbsim_data_iface: "{{ ansible_default_ipv4.interface }}"
+  when:
+    - inventory_hostname in groups['gnbsim_nodes']
+    - ansible_default_ipv4.interface is defined
+    - gnbsim_data_iface == ''
+
 - name: create macvlan:{{ gnbsim.docker.network.macvlan.name }} network
   community.docker.docker_network:
     name: "{{ gnbsim.docker.network.macvlan.name }}"
     driver: macvlan
     driver_options:
-      parent: "{{ gnbsim.router.data_iface }}"
+      parent: "{{ gnbsim_data_iface }}"
     ipam_config:
       - subnet: "{{ address_prefix }}.0/24"
         gateway: "{{ address_prefix }}.1"
