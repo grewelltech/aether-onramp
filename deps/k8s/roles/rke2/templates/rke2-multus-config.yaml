@@ -1,0 +1,29 @@
+# Installed by the aether-k8s rke2 role. RKE2's helm controller applies this to
+# the bundled rke2-multus chart (docs.rke2.io/networking/multus_sriov).
+#
+# cleanupConfigOnExit (RKE2 default: true) deletes /etc/cni/net.d/00-multus.conf
+# whenever the Multus pod stops, including at node shutdown. Canal's conflist is
+# not deleted, so on the next boot containerd has a primary CNI but no Multus
+# config until the Multus pod is running again. The kubelet re-creates every pod
+# sandbox as soon as a CNI config exists, which is before Multus has rewritten
+# its file, so a pod with k8s.v1.cni.cncf.io/networks attachments (the UPF's
+# access/core macvlans) comes back with only eth0. Kubernetes never re-runs CNI
+# ADD on a Ready sandbox, so the pod is stuck until it is deleted.
+#
+# Keeping the config means containerd loads 00-multus.conf (sorted first) from
+# the start of boot. readinessIndicatorFile makes Multus hold attachments until
+# Canal has written its conflist. RKE2 enables cleanup because the same flag
+# also enables Multus's kubeconfig token refresh loop (rancher/rke2#9313);
+# OnRamp does not use the CIS profile, so the token lives a year and is
+# re-issued every time the Multus pod starts. See also rancher/rke2#10360.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-multus
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    config:
+      cni_conf:
+        cleanupConfigOnExit: false
+        readinessIndicatorFile: /etc/cni/net.d/10-canal.conflist
