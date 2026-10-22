@@ -1,15 +1,48 @@
 ---
 
+# Resolve the data-plane interface into `core_data_iface`, deriving it
+# from the default-route interface when `core.data_iface` is unset,
+# empty, or left at the legacy placeholder `data`. Mirrors the 5gc
+# roles; see deps/5gc/roles/router/tasks/install.yml for the full
+# rationale, in particular why the result goes into a separate fact
+# rather than back into `core`.
+- name: resolve core_data_iface from core.data_iface
+  ansible.builtin.set_fact:
+    core_data_iface: "{{ core.data_iface | default('') }}"
+
+- name: derive core_data_iface from default-route interface when unset
+  ansible.builtin.set_fact:
+    core_data_iface: "{{ ansible_default_ipv4.interface }}"
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - ansible_default_ipv4.interface is defined
+    - core_data_iface in ['', 'data']
+
+- name: validate core_data_iface is set and exists on this host
+  ansible.builtin.fail:
+    msg: >-
+      core.data_iface (={{ core.data_iface | default('<unset>') | to_json }},
+      resolved to {{ core_data_iface | to_json }}) is not a valid network
+      interface on this host. Either it was left at a placeholder and no
+      IPv4 default route was available to derive from, or the configured
+      value does not match any interface in ansible_interfaces
+      ({{ ansible_interfaces | join(', ') }}). Set core.data_iface in
+      vars/main.yml to the data-plane interface name on the target node.
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - (core_data_iface in ['', 'data'])
+      or (core_data_iface not in (ansible_interfaces | default([])))
+
 # TODO: running on master node for now (fix to run on multiple nodes)
 
 - set_fact:
     systemd_network_dir: /etc/systemd/network
     systemd_system_dir: /etc/systemd/system
 
-- name: "delete iptable rule: forward from {{ core.data_iface }} to access"
+- name: "delete iptable rule: forward from {{ core_data_iface }} to access"
   iptables:
     chain: FORWARD
-    in_interface: "{{ core.data_iface }}"
+    in_interface: "{{ core_data_iface }}"
     out_interface: access
     jump: ACCEPT
     state: absent
@@ -17,21 +50,21 @@
   become: true
   ignore_errors: yes
 
-- name: "delete iptable rule: forward from access to {{ core.data_iface }}"
+- name: "delete iptable rule: forward from access to {{ core_data_iface }}"
   iptables:
     chain: FORWARD
     in_interface: access
-    out_interface: "{{ core.data_iface }}"
+    out_interface: "{{ core_data_iface }}"
     jump: ACCEPT
     state: absent
   when: inventory_hostname in groups['master_nodes']
   become: true
   ignore_errors: yes
 
-- name: "delete iptable rule: forward from {{ core.data_iface }} to core"
+- name: "delete iptable rule: forward from {{ core_data_iface }} to core"
   iptables:
     chain: FORWARD
-    in_interface: "{{ core.data_iface }}"
+    in_interface: "{{ core_data_iface }}"
     out_interface: core
     jump: ACCEPT
     state: absent
@@ -39,11 +72,11 @@
   become: true
   ignore_errors: yes
 
-- name: "delete iptable rule: forward from core to {{ core.data_iface }}"
+- name: "delete iptable rule: forward from core to {{ core_data_iface }}"
   iptables:
     chain: FORWARD
     in_interface: core
-    out_interface: "{{ core.data_iface }}"
+    out_interface: "{{ core_data_iface }}"
     jump: ACCEPT
     state: absent
   when: inventory_hostname in groups['master_nodes']
@@ -58,14 +91,14 @@
   become: true
   ignore_errors: yes
 
-- name: find {{ core.data_iface }}'s netplan network directory
+- name: find {{ core_data_iface }}'s netplan network directory
   find:
     paths:
       - /etc/systemd/network
       - /run/systemd/network
       - /lib/systemd/network
       - /usr/lib/systemd/network
-    patterns: "*{{ core.data_iface }}.network"
+    patterns: "*{{ core_data_iface }}.network"
     recurse: false
     file_type: file
   register: data_iface_network_files
@@ -73,7 +106,7 @@
   become: true
   ignore_errors: yes
 
-- name: set {{ core.data_iface }}'s netplan network filename
+- name: set {{ core_data_iface }}'s netplan network filename
   set_fact:
     data_iface_network_filename: >-
       {{
@@ -164,7 +197,7 @@
     table: nat
     chain: POSTROUTING
     source: "{{ core.upf.default_upf.ue_ip_pool }}"
-    out_interface: "{{ core.data_iface }}"
+    out_interface: "{{ core_data_iface }}"
     jump: MASQUERADE
     state: absent
   when: inventory_hostname in groups['master_nodes']

@@ -1,11 +1,44 @@
 ---
 
+# Resolve the data-plane interface into `core_data_iface`, deriving it
+# from the default-route interface when `core.data_iface` is unset,
+# empty, or left at the legacy placeholder `data`. Mirrors the 5gc
+# roles; see deps/5gc/roles/router/tasks/install.yml for the full
+# rationale, in particular why the result goes into a separate fact
+# rather than back into `core`.
+- name: resolve core_data_iface from core.data_iface
+  ansible.builtin.set_fact:
+    core_data_iface: "{{ core.data_iface | default('') }}"
+
+- name: derive core_data_iface from default-route interface when unset
+  ansible.builtin.set_fact:
+    core_data_iface: "{{ ansible_default_ipv4.interface }}"
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - ansible_default_ipv4.interface is defined
+    - core_data_iface in ['', 'data']
+
+- name: validate core_data_iface is set and exists on this host
+  ansible.builtin.fail:
+    msg: >-
+      core.data_iface (={{ core.data_iface | default('<unset>') | to_json }},
+      resolved to {{ core_data_iface | to_json }}) is not a valid network
+      interface on this host. Either it was left at a placeholder and no
+      IPv4 default route was available to derive from, or the configured
+      value does not match any interface in ansible_interfaces
+      ({{ ansible_interfaces | join(', ') }}). Set core.data_iface in
+      vars/main.yml to the data-plane interface name on the target node.
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - (core_data_iface in ['', 'data'])
+      or (core_data_iface not in (ansible_interfaces | default([])))
+
 - name: install kubernetes.core python prerequisite for 4gc/core
   import_role:
     name: preflight
     tasks_from: python_kubernetes.yml
 
-- name: find {{ core.data_iface }}'s subnet for RAN
+- name: find {{ core_data_iface }}'s subnet for RAN
   command:
     argv:
       - ip
@@ -13,21 +46,21 @@
       - route
       - show
       - dev
-      - "{{ core.data_iface }}"
+      - "{{ core_data_iface }}"
   register: result
   changed_when: false
   failed_when: false
   when: inventory_hostname in groups['master_nodes']
   become: true
 
-- name: verify {{ core.data_iface }}'s subnet can be derived for RAN
+- name: verify {{ core_data_iface }}'s subnet can be derived for RAN
   ansible.builtin.assert:
     that:
       - result.rc == 0
       - (result.stdout_lines | default([]) | select('search', ' proto kernel ') | list | length) > 0
     fail_msg: >-
-      Unable to derive ran_subnet from interface {{ core.data_iface }}.
-      Ensure core.data_iface is valid or set core.ran_subnet explicitly.
+      Unable to derive ran_subnet from interface {{ core_data_iface }}.
+      Ensure core_data_iface is valid or set core.ran_subnet explicitly.
   when:
     - inventory_hostname in groups['master_nodes']
     - core.ran_subnet == ''

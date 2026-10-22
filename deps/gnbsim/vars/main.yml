@@ -14,7 +14,7 @@ gnbsim:
         name: gnbnet
 
   router:
-    data_iface: ens18
+    data_iface: ""
     macvlan:
       subnet_prefix: "172.20"
 

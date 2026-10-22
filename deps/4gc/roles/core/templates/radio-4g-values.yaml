@@ -149,9 +149,9 @@ omec-user-plane:
       ran:
         subnet: {{ ran_subnet }} # Subnet for the gNB network
       access:
-        iface:  {{ core.data_iface }}
+        iface:  {{ core_data_iface }}
       core:
-        iface: {{ core.data_iface }}
+        iface: {{ core_data_iface }}
       cfgFiles:
         upf.jsonc:
           mode: af_packet
