@@ -473,7 +473,7 @@ omec-user-plane:
         subnet: {{ ran_subnet }} # Subnet for the gNB network
       access:
         ipam: static
-        cniPlugin: {{ 'vfioveth' if core.upf.mode == 'dpdk' else 'macvlan' }}
+        cniPlugin: {{ core.upf.access_cni_plugin | default('vfioveth' if core.upf.mode == 'dpdk' else 'macvlan', true) }}
         iface: {{ core.data_iface }}
 {% if core.upf.mode == 'dpdk' %}
         resourceName: {{ core.upf.access_resource_name | default('intel.com/intel_sriov_vfio_access') | to_json }}
@@ -482,8 +482,8 @@ omec-user-plane:
         ip: {{ access_ip }}
       core:
         ipam: static
-        cniPlugin: {{ 'vfioveth' if core.upf.mode == 'dpdk' else 'macvlan' }}
-        iface: {{ core.data_iface }}
+        cniPlugin: {{ core.upf.core_cni_plugin | default('vfioveth' if core.upf.mode == 'dpdk' else 'macvlan', true) }}
+        iface: {{ core.data_iface_n6 | default(core.data_iface, true) }}
 {% if core.upf.mode == 'dpdk' %}
         resourceName: {{ core.upf.core_resource_name | default('intel.com/intel_sriov_vfio_core') | to_json }}
 {% endif %}

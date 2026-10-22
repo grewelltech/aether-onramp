@@ -36,7 +36,10 @@ schema:
       description: Enable SD-Core closed-loop control plane behavior
     data_iface:
       type: string
-      description: Data-plane network interface used for UPF traffic
+      description: Data-plane network interface used for UPF traffic; the UPF's access (N3) side
+    data_iface_n6:
+      type: string
+      description: Interface for the UPF's core (N6) side; unset shares data_iface with the access side
     values_file:
       type: string
       description: Helm values file path for the core deployment
@@ -88,6 +91,14 @@ schema:
           # See access_resource_name: same fully-qualified extended
           # resource-name constraint, with length bounds encoded in the pattern.
           pattern: "^(?!.*kubernetes\\.io/)(?!requests\\.)(?=[^/]{1,244}/)[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+        access_cni_plugin:
+          type: string
+          description: CNI plugin for the UPF's access (N3) attachment; macvlan shares the interface, host-device moves it into the pod
+          enum: [macvlan, host-device, vfioveth]
+        core_cni_plugin:
+          type: string
+          description: CNI plugin for the UPF's core (N6) attachment; macvlan shares the interface, host-device moves it into the pod
+          enum: [macvlan, host-device, vfioveth]
         multihop_gnb:
           type: boolean
           description: When true, the access subnet shares data_iface instead of using a separate RAN-facing interface

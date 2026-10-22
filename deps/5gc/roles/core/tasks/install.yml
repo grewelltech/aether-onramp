@@ -21,11 +21,19 @@
       interface in ansible_interfaces ({{ ansible_interfaces | join(', ') }}).
       Set core.data_iface in vars/main.yml to the data-plane
       interface name on the target node.
+  #
+  # The host-presence clause does not apply to an access side attached with
+  # host-device: that plugin moves the interface into the UPF pod, so it is
+  # legitimately absent from the host for as long as the pod holds it, and
+  # requiring it here would refuse to re-install a deployment that is working.
+  # The unset and placeholder clauses still apply either way.
   when:
     - inventory_hostname in groups['master_nodes']
     - (core.data_iface is not defined)
       or (core.data_iface in ['', 'data'])
-      or (core.data_iface not in (ansible_interfaces | default([])))
+      or (core.data_iface not in (ansible_interfaces | default([]))
+          and (core.upf.access_cni_plugin
+               | default('vfioveth' if core.upf.mode == 'dpdk' else 'macvlan', true)) != 'host-device')
 
 # kubernetes.core modules (helm, k8s, k8s_info, etc.) require the python
 # `kubernetes` client library, which is NOT pulled in by a stock apt
@@ -66,6 +74,11 @@
 # UPF. Shared with the additional-UPF install path (5gc/upf) via the
 # preflight role so both paths accept identical configuration and cannot
 # drift. The task file is internally gated on DPDK mode and master_nodes.
+- name: validate the UPF's network attachments for built-in UPF
+  import_role:
+    name: preflight
+    tasks_from: upf_attachments.yml
+
 - name: validate SR-IOV UPF resource pools for built-in UPF
   import_role:
     name: preflight

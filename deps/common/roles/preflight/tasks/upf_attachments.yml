@@ -1,0 +1,96 @@
+---
+
+# Preflight for the built-in UPF's network attachments.
+#
+# Scoped to the built-in UPF: the additional-UPF role renders its own values
+# from the same core.upf.* keys, but this PR leaves that template alone, so
+# additional UPFs keep attaching exactly as they do today.
+#
+# `core.data_iface` is the access (N3) interface. `core.data_iface_n6` moves the
+# core (N6) side to a second interface, and the two `*_cni_plugin` values choose
+# how each side attaches. `host-device` MOVES the named interface into the UPF
+# pod, which is what makes a separated deployment real; `macvlan` creates a
+# child of it, which is what lets the collapsed default share one interface.
+
+- name: resolve the UPF's effective core-side interface and CNI plugins
+  ansible.builtin.set_fact:
+    upf_n6_iface: "{{ core.data_iface_n6 | default(core.data_iface, true) }}"
+    upf_access_cni: "{{ core.upf.access_cni_plugin | default('vfioveth' if core.upf.mode == 'dpdk' else 'macvlan', true) }}"
+    upf_core_cni: "{{ core.upf.core_cni_plugin | default('vfioveth' if core.upf.mode == 'dpdk' else 'macvlan', true) }}"
+  when: inventory_hostname in groups['master_nodes']
+
+# A host-device interface is absent from the host for as long as the UPF pod
+# holds it, so requiring host presence would refuse to re-install a deployment
+# that is working. Only the sides that stay on the host are checked.
+- name: validate the UPF's core-side interface exists on this host
+  ansible.builtin.fail:
+    msg: >-
+      core.data_iface_n6 (={{ core.data_iface_n6 | default('<unset>') | to_json }},
+      resolved to {{ upf_n6_iface | to_json }}) is not an interface on this host
+      (ansible_interfaces: {{ ansible_interfaces | default([]) | join(', ') }}).
+      Set it to the N6 interface on the target node, or leave it unset to share
+      core.data_iface with the access side.
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - upf_core_cni != 'host-device'
+    - upf_n6_iface not in (ansible_interfaces | default([]))
+
+- name: refuse host-device when both UPF sides resolve to one interface
+  ansible.builtin.fail:
+    msg: >-
+      Both UPF sides resolve to {{ core.data_iface | to_json }} and at least one
+      attaches with host-device (access={{ upf_access_cni | to_json }},
+      core={{ upf_core_cni | to_json }}). host-device moves the interface into the
+      pod, so it can serve one side only: the second attachment finds the device
+      gone and the pod never starts. Set core.data_iface_n6 to a second interface,
+      or use macvlan, which can be shared.
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - upf_n6_iface == core.data_iface
+    - ('host-device' in [upf_access_cni, upf_core_cni])
+
+- name: refuse to move this host's default-route interface into the UPF pod
+  ansible.builtin.fail:
+    msg: >-
+      A UPF side attaches with host-device on
+      {{ ansible_default_ipv4.interface | to_json }}, which carries this host's
+      default route (access={{ core.data_iface | to_json }}/{{ upf_access_cni | to_json }},
+      core={{ upf_n6_iface | to_json }}/{{ upf_core_cni | to_json }}). host-device
+      moves the interface into the pod, so this would take the node's own
+      connectivity with it and leave it unreachable to undo. Name a dedicated
+      data-plane interface instead. Note core.data_iface is itself derived from
+      the default-route interface when left unset.
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - ansible_default_ipv4.interface is defined
+    - (upf_access_cni == 'host-device' and core.data_iface == ansible_default_ipv4.interface)
+      or (upf_core_cni == 'host-device' and upf_n6_iface == ansible_default_ipv4.interface)
+
+# In dpdk mode the UPF attaches through the SR-IOV device plugin, whose pools
+# sriov_upf_pools.yml validates on core.data_iface. Both deviations below would
+# leave that validation checking an interface the UPF does not use.
+- name: refuse host-device while core.upf.mode is dpdk
+  ansible.builtin.fail:
+    msg: >-
+      core.upf.mode is dpdk but a UPF side attaches with host-device
+      (access={{ upf_access_cni | to_json }}, core={{ upf_core_cni | to_json }}).
+      dpdk attaches through the SR-IOV device plugin using
+      core.upf.access_resource_name / core_resource_name, which host-device
+      bypasses. Use vfioveth for dpdk, or af_packet mode with host-device.
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - core.upf.mode == 'dpdk'
+    - ('host-device' in [upf_access_cni, upf_core_cni])
+
+- name: refuse a separate N6 interface while core.upf.mode is dpdk
+  ansible.builtin.fail:
+    msg: >-
+      core.upf.mode is dpdk and core.data_iface_n6 ({{ upf_n6_iface | to_json }})
+      differs from core.data_iface ({{ core.data_iface | to_json }}). The SR-IOV
+      VF preflight validates core.data_iface only, so the VFs backing the N6 pool
+      would go unchecked and the UPF would wait on a resource the device plugin
+      never registers. Keep both sides on one interface in dpdk mode.
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - core.upf.mode == 'dpdk'
+    - upf_n6_iface != core.data_iface

@@ -23,6 +23,8 @@ k8s:
 
 core:
   data_iface: ens18
+  # N6 on its own interface; unset shares data_iface. See deps/5gc/README.md.
+  #data_iface_n6: ens19
   values_file: "deps/5gc/roles/core/templates/sdcore-5g-values.yaml"
   ran_subnet: "172.20.0.0/16"    # set to empty string to get subnet from 'data_iface'
   helm:
@@ -34,6 +36,8 @@ core:
     core_subnet: "192.168.250.1/24"  # core subnet & gateway
     mode: af_packet      # Options: af_packet or dpdk
     multihop_gnb: false      # set to true to override default N3 subnet
+    #access_cni_plugin: host-device   # macvlan shares one interface; host-device moves it
+    #core_cni_plugin: host-device
     default_upf:
       ip:
         access: "192.168.252.3"
