@@ -183,6 +183,18 @@
   become: true
   ignore_errors: yes
 
+# Install restarts networkd after writing the drop-in; mirror that after
+# removing it, so networkd stops carrying IPForward=yes for the interface.
+- name: restart systemd-networkd after removing its drop-ins
+  systemd:
+    name: systemd-networkd
+    state: restarted
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - ((networkd_files | default({})) | dict2items | rejectattr('value', 'equalto', '') | list | length) > 0
+  become: true
+  ignore_errors: yes
+
 # Every 10-aether-*.netdev / 20-aether-*.network under the network directory
 # is one this role wrote, so remove them by pattern rather than by the names
 # the current config happens to use.
@@ -284,12 +296,18 @@
   become: true
   ignore_errors: yes
 
-# The backup records what install found: net.ipv4.ip_forward, and one
-# forwarding line per interface a macvlan child was put on (either spelling,
-# dotted or slashed, from older installs). Restore every interface it names
-# rather than the ones the current config happens to list.
+# The backup records what install found: net.ipv4.ip_forward, one forwarding
+# line per interface a macvlan child was put on (either spelling, dotted or
+# slashed, from older installs), and each interface's GRO setting. Restore
+# every interface it names rather than the ones the current config happens to
+# list.
 - name: extract saved router sysctl values
   set_fact:
+    saved_gro: >-
+      {{
+        (router_sysctl_backup_content.content | default('') | b64decode)
+        | regex_findall('(?m)^ethtool/([^/]+)/gro=(on|off)$')
+      }}
     saved_net_ipv4_ip_forward: >-
       {{
         (router_sysctl_backup_content.content | default('') | b64decode)
@@ -308,52 +326,88 @@
   when: inventory_hostname in groups['master_nodes']
   ignore_errors: yes
 
-- name: set net.ipv4.conf.all.arp_filter to 0
-  ansible.posix.sysctl:
-    name: net.ipv4.conf.all.arp_filter
-    value: '0'
-    sysctl_set: true
-    reload: true
+# Install persisted these in sysctl.conf; put the runtime values back and
+# remove the lines rather than persisting the restored values too.
+- name: restore the arp and rp_filter sysctls
+  command:
+    argv:
+      - sysctl
+      - -w
+      - "{{ item.name }}={{ item.value }}"
+  loop:
+    - { name: net.ipv4.conf.all.arp_filter, value: '0' }
+    - { name: net.ipv4.conf.all.arp_ignore, value: '0' }
+    - { name: net.ipv4.conf.all.arp_announce, value: '0' }
+    - { name: net.ipv4.conf.all.rp_filter, value: '2' }
+  loop_control:
+    label: "{{ item.name }}={{ item.value }}"
   when: inventory_hostname in groups['master_nodes']
   become: true
   ignore_errors: yes
 
-- name: set net.ipv4.conf.all.arp_ignore to 0
+- name: remove the arp and rp_filter sysctl configuration
   ansible.posix.sysctl:
-    name: net.ipv4.conf.all.arp_ignore
-    value: '0'
-    sysctl_set: true
-    reload: true
+    name: "{{ item }}"
+    state: absent
+    sysctl_set: false
+    reload: false
+  loop:
+    - net.ipv4.conf.all.arp_filter
+    - net.ipv4.conf.all.arp_ignore
+    - net.ipv4.conf.all.arp_announce
+    - net.ipv4.conf.all.rp_filter
   when: inventory_hostname in groups['master_nodes']
   become: true
   ignore_errors: yes
 
-- name: set net.ipv4.conf.all.arp_announce to 0
-  ansible.posix.sysctl:
-    name: net.ipv4.conf.all.arp_announce
-    value: '0'
-    sysctl_set: true
-    reload: true
+- name: restore each interface's GRO setting
+  command:
+    argv:
+      - ethtool
+      - -K
+      - "{{ item.0 }}"
+      - gro
+      - "{{ item.1 }}"
+  loop: "{{ saved_gro | default([]) }}"
+  loop_control:
+    label: "{{ item.0 }} gro {{ item.1 }}"
   when: inventory_hostname in groups['master_nodes']
   become: true
   ignore_errors: yes
 
-- name: set net.ipv4.conf.all.rp_filter to 2
+# Writing net.ipv4.ip_forward resets every interface's forwarding to that
+# value, so it goes back first and the per-interface values after it. The
+# runtime value is set with sysctl -w and the line install persisted is
+# removed, rather than persisting the original: a line left in sysctl.conf
+# would be re-applied by the next reload, and the host had none before.
+- name: restore net.ipv4.ip_forward
+  command:
+    argv:
+      - sysctl
+      - -w
+      - "net.ipv4.ip_forward={{ saved_net_ipv4_ip_forward }}"
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - (saved_net_ipv4_ip_forward | default('')) != ''
+  become: true
+  ignore_errors: yes
+
+- name: remove net.ipv4.ip_forward sysctl configuration
   ansible.posix.sysctl:
-    name: net.ipv4.conf.all.rp_filter
-    value: '2'
-    sysctl_set: true
-    reload: true
+    name: net.ipv4.ip_forward
+    state: absent
+    sysctl_set: false
+    reload: false
   when: inventory_hostname in groups['master_nodes']
   become: true
   ignore_errors: yes
 
 - name: restore each interface's forwarding value
-  ansible.posix.sysctl:
-    name: "net/ipv4/conf/{{ item.0 }}/forwarding"
-    value: "{{ item.1 }}"
-    sysctl_set: true
-    reload: true
+  command:
+    argv:
+      - sysctl
+      - -w
+      - "net/ipv4/conf/{{ item.0 }}/forwarding={{ item.1 }}"
   loop: "{{ saved_iface_forwarding | default([]) }}"
   loop_control:
     label: "{{ item.0 }}"
@@ -368,37 +422,11 @@
     name: "net/ipv4/conf/{{ item.0 }}/forwarding"
     state: absent
     sysctl_set: false
-    reload: true
+    reload: false
   loop: "{{ saved_iface_forwarding | default([]) }}"
   loop_control:
     label: "{{ item.0 }}"
-  when:
-    - inventory_hostname in groups['master_nodes']
-    - item.1 == ''
-  become: true
-  ignore_errors: yes
-
-- name: restore net.ipv4.ip_forward
-  ansible.posix.sysctl:
-    name: net.ipv4.ip_forward
-    value: '{{ saved_net_ipv4_ip_forward }}'
-    sysctl_set: true
-    reload: true
-  when:
-    - inventory_hostname in groups['master_nodes']
-    - (saved_net_ipv4_ip_forward | default('')) != ''
-  become: true
-  ignore_errors: yes
-
-- name: remove net.ipv4.ip_forward sysctl configuration
-  ansible.posix.sysctl:
-    name: net.ipv4.ip_forward
-    state: absent
-    sysctl_set: false
-    reload: true
-  when:
-    - inventory_hostname in groups['master_nodes']
-    - (saved_net_ipv4_ip_forward | default('')) == ''
+  when: inventory_hostname in groups['master_nodes']
   become: true
   ignore_errors: yes
 

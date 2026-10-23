@@ -95,16 +95,9 @@
     - not ((router_sysctl_backup_content.content | default('') | b64decode) is regex('(?m)^net\\.ipv4\\.ip_forward='))
   become: true
 
-- name: set net.ipv4.ip_forward to 1
-  ansible.posix.sysctl:
-    name: net.ipv4.ip_forward
-    value: '1'
-    sysctl_set: true
-    reload: true
-  when: inventory_hostname in groups['master_nodes']
-  become: true
-
-# Per-interface forwarding on each interface a macvlan child sits on. A VLAN
+# Per-interface forwarding on each interface a macvlan child sits on, read
+# before net.ipv4.ip_forward is set: writing that resets every interface's
+# forwarding, so reading afterwards would record 1 as the original. A VLAN
 # child does not exist yet on a first install; the macvlan service enables
 # forwarding on it as it creates it, and there is no original value to keep.
 - name: read current forwarding value of each UPF network's interface
@@ -135,6 +128,15 @@
     - inventory_hostname in groups['master_nodes']
     - item.rc is defined and item.rc == 0
     - not ((router_sysctl_backup_content.content | default('') | b64decode) is regex('^(net\\.ipv4\\.conf\\.' ~ (item.item | regex_escape) ~ '\\.forwarding|net/ipv4/conf/' ~ (item.item | regex_escape) ~ '/forwarding)=', multiline=true))
+  become: true
+
+- name: set net.ipv4.ip_forward to 1
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    sysctl_set: true
+    reload: true
+  when: inventory_hostname in groups['master_nodes']
   become: true
 
 - name: set forwarding to 1 on each UPF network's interface
@@ -171,6 +173,36 @@
   loop_control:
     label: "{{ item.name }}"
   when: inventory_hostname in groups['master_nodes']
+  become: true
+
+# GRO is turned off for the UPF's sake; remember what it was so uninstall can
+# put it back. The record shares the sysctl backup file, under its own key.
+- name: read the current GRO setting of each interface the UPF's traffic crosses
+  shell: ethtool -k {{ item | quote }} | awk '/^generic-receive-offload:/ {print $2}'
+  loop: "{{ router_base_ifaces | default([]) }}"
+  register: original_gro
+  changed_when: false
+  failed_when: false
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - item in ansible_interfaces
+  become: true
+
+- name: persist original GRO settings for uninstall
+  lineinfile:
+    path: "{{ router_sysctl_backup_file }}"
+    create: true
+    mode: '0600'
+    line: "ethtool/{{ item.item }}/gro={{ item.stdout | trim }}"
+    regexp: "^ethtool/{{ item.item | regex_escape }}/gro="
+  loop: "{{ original_gro.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - item.rc is defined and item.rc == 0
+    - (item.stdout | trim) in ['on', 'off']
+    - not ((router_sysctl_backup_content.content | default('') | b64decode) is regex('^ethtool/' ~ (item.item | regex_escape) ~ '/gro=', multiline=true))
   become: true
 
 - name: Disable GRO flag on each interface the UPF's traffic crosses
