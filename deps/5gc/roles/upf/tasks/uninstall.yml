@@ -1,18 +1,15 @@
 ---
 
-- name: delete route for upf to UE
-  command:
-    argv:
-      - ip
-      - route
-      - del
-      - "{{ item.value.ue_ip_pool }}"
-      - via
-      - "{{ item.value.ip.core }}"
-  when: inventory_hostname in groups['master_nodes']
-  with_dict: "{{ core.upf.additional_upfs}}"
-  become: true
-  ignore_errors: yes
+- name: resolve UPF networking
+  import_role:
+    name: preflight
+    tasks_from: upf_networks.yml
+  vars:
+    upf_networks_strict: false
+
+- name: list the additional UPF instances
+  ansible.builtin.set_fact:
+    additional_upfs: "{{ upf_instances | dict2items | rejectattr('value.builtin') | list }}"
 
 - name: verify helm prerequisites for 5gc/upf uninstall
   import_role:
@@ -35,7 +32,9 @@
     release_namespace: aether-upf-{{ item.key }}
     state: absent
     wait: true
-  with_dict: "{{ core.upf.additional_upfs}}"
+  loop: "{{ additional_upfs }}"
+  loop_control:
+    label: "{{ item.key }}"
   when: inventory_hostname in groups['master_nodes']
   ignore_errors: yes
 
@@ -46,7 +45,8 @@
       - delete
       - namespace
       - "aether-upf-{{ item.key }}"
-  with_dict: "{{ core.upf.additional_upfs}}"
+  loop: "{{ additional_upfs }}"
+  loop_control:
+    label: "{{ item.key }}"
   when: inventory_hostname in groups['master_nodes']
   ignore_errors: yes
-
