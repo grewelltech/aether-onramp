@@ -14,7 +14,7 @@ To install ueransim, follow these steps:
 node2
 ```
 2. Install the UERANSIM container image and host routing
-   - Update the config files under `config/` for both UE and gNB.
+   - Update the config files under `config/` for both UE and gNB. A node that needs its own N2/N3 addresses, cell identity or SUPI can set `ngap_ip`, `gtp_ip`, `link_ip`, `nci` and `supi` on its `ueransim.servers` entry instead of copying the files; unset values render as before.
    - Run `make ueransim-install`.
 3. Start the simulation
    - Set "amf.ip" to the IP address of the core machine.
