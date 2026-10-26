@@ -1,0 +1,62 @@
+---
+
+# Resolve a RAN node's data-plane interface, and its address, into two facts
+# the RAN roles read instead of their own config key:
+#
+#   ran_data_iface    the interface set in `preflight_ran_data_iface`, or the
+#                     interface carrying this host's default route when that is
+#                     empty.
+#   ran_data_address  that interface's IPv4 address, or this host's
+#                     default-route address when the interface has none. The
+#                     core routes the node's simulator subnet via this address,
+#                     so it has to be the address on the network the core
+#                     shares with the node, not whatever the default route uses.
+#
+# They are facts of their own because the config key itself cannot be
+# overwritten: every Makefile passes the blueprint with `--extra-vars`, and
+# extra-vars take precedence over `set_fact`, so a role that set_facts its own
+# dict (e.g. `gnbsim`) keeps the empty value. Each `make` target is a separate
+# playbook run, so every play that reads the interface includes this first.
+#
+# `preflight_strict: false` (the uninstall paths) warns instead of failing:
+# cleanup should not be blocked by an interface that has since gone away.
+
+- name: resolve {{ preflight_label }}
+  ansible.builtin.set_fact:
+    ran_data_iface: "{{ (preflight_ran_data_iface | default('', true) | string | trim) or (ansible_default_ipv4.interface | default('')) }}"
+    ran_data_iface_configured: "{{ (preflight_ran_data_iface | default('', true) | string | trim) != '' }}"
+
+# Interface facts are named after the interface with '-' and ':' turned into
+# '_' ('.' is kept: ansible_facts['data_0.122'] for data-0.122).
+- name: read the address of {{ preflight_label }}
+  ansible.builtin.set_fact:
+    ran_data_address: "{{ ((ansible_facts[ran_data_iface | regex_replace('[-:]', '_')] | default({})).ipv4 | default({})).address | default('') or (ansible_default_ipv4.address | default('')) }}"
+    ran_data_address_is_iface: "{{ (((ansible_facts[ran_data_iface | regex_replace('[-:]', '_')] | default({})).ipv4 | default({})).address | default('')) != '' }}"
+
+- name: fail when {{ preflight_label }} is not an interface on this host
+  ansible.builtin.fail:
+    msg: >-
+      {{ preflight_label }} resolved to {{ ran_data_iface | to_json }}{{ '' if ran_data_iface_configured | bool else ' (the default-route interface)' }},
+      which is not an interface on this host ({{ (ansible_interfaces | default([])) | join(', ') }}).
+      Set {{ preflight_label }} to this node's data-plane interface, or leave it
+      empty to use the interface carrying the default route.
+  when:
+    - preflight_strict | default(true) | bool
+    - ran_data_iface == '' or ran_data_iface not in (ansible_interfaces | default([]))
+
+- name: warn when {{ preflight_label }} is not an interface on this host
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ preflight_label }} resolved to {{ ran_data_iface | to_json }}, which is not an
+      interface on this host. Interface-specific cleanup may be skipped; re-run with
+      {{ preflight_label }} set to the interface the install used.
+  when:
+    - not (preflight_strict | default(true) | bool)
+    - ran_data_iface == '' or ran_data_iface not in (ansible_interfaces | default([]))
+
+- name: show the resolved {{ preflight_label }}
+  ansible.builtin.debug:
+    msg: >-
+      {{ preflight_label }}: {{ ran_data_iface }}
+      ({{ preflight_ran_data_iface_origin | default('configured') if ran_data_iface_configured | bool else 'default-route interface' }}),
+      address {{ ran_data_address }}{{ '' if ran_data_address_is_iface | bool else ' (the default-route address: ' ~ ran_data_iface ~ ' has no IPv4 address)' }}

@@ -32,6 +32,7 @@ producing a confusing template error later.
 | `tasks_from:` | What it checks |
 |---|---|
 | `docker_cpu` | Docker can see at least `preflight_min_cpus` CPUs (catches systemd cgroup CPU starvation). |
+| `ran_data_iface` | Resolves a RAN node's data interface (`preflight_ran_data_iface`, or the default-route interface when empty) into `ran_data_iface` and its address into `ran_data_address`, and fails when it is not an interface on the host. |
 
 ## Adding a new check
 

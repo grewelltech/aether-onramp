@@ -81,7 +81,6 @@ jobs:
       configure_commands: |
         sed -i "s/10.76.28.113/$MYIP/" vars/main.yml
         sed -i "s/10.76.28.111/$MYIP/" vars/main.yml
-        sed -i "s/ens18/$MYIFC/g" vars/main.yml
         sed -i "s|aetherproject/ueransim:rel-1.0.0|${{ github.event.inputs.ueransim_image || 'aetherproject/ueransim:rel-1.0.0' }}|" vars/main.yml
         git diff vars/main.yml
       install_commands: |

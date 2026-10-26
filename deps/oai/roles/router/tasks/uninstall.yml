@@ -10,6 +10,43 @@
   vars:
     upf_networks_strict: false
 
+# The install rendered its data interface into the rules file; when
+# oai.docker.network.data_iface is empty, that interface is the one to clean
+# up, which the default route may no longer point at.
+- name: read the iptables rules file the install wrote
+  ansible.builtin.slurp:
+    src: /etc/iptables/oai-rules.v4
+  register: oai_rules_file
+  failed_when: false
+  changed_when: false
+  become: true
+  when: inventory_hostname in groups['oai_nodes']
+
+- name: recover the data interface the install used from the rules file
+  ansible.builtin.set_fact:
+    oai_recorded_data_iface: >-
+      {{ (oai_rules_file.content | b64decode)
+         | regex_findall('(?m)^-A FORWARD -i ([^ ]+) -o ' ~ (oai.docker.network.bridge.name | regex_escape) ~ ' ')
+         | difference(['access']) | first | default('') }}
+  when:
+    - inventory_hostname in groups['oai_nodes']
+    - oai_rules_file.content is defined
+
+# oai.docker.network.data_iface is resolved into `ran_data_iface` and
+# `ran_data_address` (see deps/common/roles/preflight/tasks/ran_data_iface.yml):
+# an empty value means the interface the install recorded, or failing that the
+# default-route interface.
+- name: resolve oai.docker.network.data_iface
+  import_role:
+    name: preflight
+    tasks_from: ran_data_iface.yml
+  vars:
+    preflight_label: oai.docker.network.data_iface
+    preflight_ran_data_iface: "{{ oai.docker.network.data_iface | default('', true) or oai_recorded_data_iface | default('') }}"
+    preflight_ran_data_iface_origin: "{{ 'configured' if oai.docker.network.data_iface | default('', true) else 'recorded by the install' }}"
+    preflight_strict: false
+  when: inventory_hostname in groups['oai_nodes']
+
 - name: check if servers and config server length are equal
   fail:
     msg: "Mismatch in number of servers and oai nodes: {{ oai.servers|length }} vs {{ groups['oai_nodes']|length }}"
@@ -28,7 +65,22 @@
   become: true
   ignore_errors: yes
 
-- name: "remove a static route on core host for {{ oai.docker.network.subnet }} via {{ hostvars[item]['ansible_default_ipv4']['address'] }}"
+- name: "remove a static route on core host for {{ oai.docker.network.subnet }} via {{ hostvars[item]['ran_data_address'] }}"
+  command:
+    argv:
+      - ip
+      - route
+      - del
+      - "{{ oai.docker.network.subnet }}"
+      - via
+      - "{{ hostvars[item]['ran_data_address'] }}"
+  with_items: "{{ play_hosts | intersect(groups['oai_nodes']) | difference(groups['master_nodes']) }}"
+  when: (inventory_hostname in groups['master_nodes']) and oai.docker.network.name != "host"
+  become: true
+  ignore_errors: yes
+
+# Installs before ran_data_address routed via the node's default-route address.
+- name: "remove a static route an earlier install added on core host for {{ oai.docker.network.subnet }} via {{ hostvars[item]['ansible_default_ipv4']['address'] }}"
   command:
     argv:
       - ip
@@ -38,7 +90,11 @@
       - via
       - "{{ hostvars[item]['ansible_default_ipv4']['address'] }}"
   with_items: "{{ play_hosts | intersect(groups['oai_nodes']) | difference(groups['master_nodes']) }}"
-  when: (inventory_hostname in groups['master_nodes']) and oai.docker.network.name != "host"
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - oai.docker.network.name != "host"
+    - hostvars[item]['ansible_default_ipv4']['address'] is defined
+    - hostvars[item]['ansible_default_ipv4']['address'] != hostvars[item]['ran_data_address']
   become: true
   ignore_errors: yes
 
@@ -96,21 +152,21 @@
   become: true
   ignore_errors: yes
 
-- name: "remove iptable rule: forward from {{ oai.docker.network.data_iface }} to {{ oai.docker.network.bridge.name }} "
+- name: "remove iptable rule: forward from {{ ran_data_iface }} to {{ oai.docker.network.bridge.name }} "
   iptables:
     chain: FORWARD
-    in_interface: "{{ oai.docker.network.data_iface }}"
+    in_interface: "{{ ran_data_iface }}"
     out_interface: "{{ oai.docker.network.bridge.name }}"
     jump: ACCEPT
     state: absent
   when: inventory_hostname in groups['oai_nodes'] and oai.docker.network.name != "host"
   become: true
 
-- name: "delete iptable rule: forward from {{ oai.docker.network.bridge.name }} to {{ oai.docker.network.data_iface }}"
+- name: "delete iptable rule: forward from {{ oai.docker.network.bridge.name }} to {{ ran_data_iface }}"
   iptables:
     chain: FORWARD
     in_interface: "{{ oai.docker.network.bridge.name }}"
-    out_interface: "{{ oai.docker.network.data_iface }}"
+    out_interface: "{{ ran_data_iface }}"
     jump: ACCEPT
     state: absent
   when: inventory_hostname in groups['oai_nodes'] and oai.docker.network.name != "host"
