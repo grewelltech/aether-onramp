@@ -58,7 +58,7 @@ gnbsim:
         name: gnbnet
 
   router:
-    data_iface: ens18
+    data_iface: ""          # "" uses the interface carrying the default route
     macvlan:
       subnet_prefix: "172.20"
 

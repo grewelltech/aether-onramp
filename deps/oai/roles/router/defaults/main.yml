@@ -1,7 +1,7 @@
 oai:
   docker:
     network:
-      data_iface: data
+      data_iface: ""
       name: public_net
       subnet: "172.20.0.0/16"
       bridge:

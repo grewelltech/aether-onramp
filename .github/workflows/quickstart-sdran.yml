@@ -23,7 +23,6 @@ jobs:
       vars_template: vars/main-sdran.yml
       configure_commands: |
         sed -i "s/10.76.28.113/$MYIP/" vars/main.yml
-        sed -i "s/ens18/$MYIFC/g" vars/main.yml
       install_commands: |
         make k8s-install
         make 5gc-install

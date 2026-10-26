@@ -9,7 +9,7 @@ oai:
       gnb_image: oaisoftwarealliance/oai-gnb:2026.w10
       ue_image: oaisoftwarealliance/oai-nr-ue:2026.w10
     network:
-      data_iface: data
+      data_iface: ""
       name: public_net
       subnet: "172.20.0.0/16"
       bridge:

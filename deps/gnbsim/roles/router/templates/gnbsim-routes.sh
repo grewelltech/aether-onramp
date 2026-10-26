@@ -16,7 +16,7 @@ case "$action" in
 {% if inventory_hostname in groups['master_nodes'] %}
 {% if peer_gnbsim_nodes | length > 0 %}
 {% for item in peer_gnbsim_nodes %}
-    /usr/sbin/ip route replace {{ gnbsim.router.macvlan.subnet_prefix }}.{{ lookup('ansible.utils.index_of', groups['gnbsim_nodes'], 'eq', item) }}.0/24 via {{ hostvars[item]['ansible_default_ipv4']['address'] }}
+    /usr/sbin/ip route replace {{ gnbsim.router.macvlan.subnet_prefix }}.{{ lookup('ansible.utils.index_of', groups['gnbsim_nodes'], 'eq', item) }}.0/24 via {{ hostvars[item]['ran_data_address'] }}
 {% endfor %}
 {% else %}
   :
@@ -31,7 +31,7 @@ case "$action" in
 {% if inventory_hostname in groups['master_nodes'] %}
 {% if peer_gnbsim_nodes | length > 0 %}
 {% for item in peer_gnbsim_nodes %}
-    /usr/sbin/ip route del {{ gnbsim.router.macvlan.subnet_prefix }}.{{ lookup('ansible.utils.index_of', groups['gnbsim_nodes'], 'eq', item) }}.0/24 via {{ hostvars[item]['ansible_default_ipv4']['address'] }} || true
+    /usr/sbin/ip route del {{ gnbsim.router.macvlan.subnet_prefix }}.{{ lookup('ansible.utils.index_of', groups['gnbsim_nodes'], 'eq', item) }}.0/24 via {{ hostvars[item]['ran_data_address'] }} || true
 {% endfor %}
 {% else %}
   :

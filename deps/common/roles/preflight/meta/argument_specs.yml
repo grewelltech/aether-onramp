@@ -39,3 +39,39 @@ argument_specs:
         description: >-
           Kill switch. When false, the entire preflight block is skipped.
           Default-on so production deployments fail loudly by default.
+
+  ran_data_iface:
+    short_description: Resolve a RAN node's data-plane interface and address.
+    description:
+      - >-
+        Sets `ran_data_iface` to `preflight_ran_data_iface`, or to the interface
+        carrying the host's default route when that is empty, and
+        `ran_data_address` to that interface's IPv4 address (the default-route
+        address when it has none). Fails when the interface is not on the host,
+        or warns when `preflight_strict` is false. The values are facts of their
+        own because the RAN config keys arrive as extra-vars, which `set_fact`
+        cannot override.
+    options:
+      preflight_label:
+        type: str
+        required: true
+        description: >-
+          The config key being resolved, e.g. "gnbsim.router.data_iface"; used
+          in task names and messages.
+      preflight_ran_data_iface:
+        type: str
+        default: ""
+        description: >-
+          The configured interface. Empty means the default-route interface.
+      preflight_ran_data_iface_origin:
+        type: str
+        default: configured
+        description: >-
+          Where a non-empty `preflight_ran_data_iface` came from, for the
+          message that shows the result (e.g. "recorded by the install").
+      preflight_strict:
+        type: bool
+        default: true
+        description: >-
+          Fail when the interface is not on the host. Uninstall paths pass false
+          and get a warning instead.

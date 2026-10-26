@@ -63,7 +63,7 @@ schema:
       properties:
         data_iface:
           type: string
-          description: Data-plane interface used for routing
+          description: Data-plane interface used for routing; empty uses the default-route interface
         macvlan:
           type: object
           properties:
