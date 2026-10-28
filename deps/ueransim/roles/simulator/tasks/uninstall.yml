@@ -20,7 +20,7 @@
 
 - name: remove UERANSIM config directory
   file:
-    path: /tmp/ueransim
+    path: /var/lib/ueransim/conf
     state: absent
   ignore_errors: yes
   become: true
