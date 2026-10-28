@@ -20,12 +20,8 @@
 
 - name: remove UERANSIM config directory
   file:
-    path: "{{ item }}"
+    path: /var/lib/ueransim/conf
     state: absent
-  loop:
-    - /var/lib/ueransim/conf
-    # the pre-/var/lib location, cleaned up on upgrade
-    - /tmp/ueransim
   ignore_errors: yes
   become: true
   when: inventory_hostname in groups['ueransim_nodes']
