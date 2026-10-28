@@ -7,24 +7,18 @@
   when: inventory_hostname in groups['n3iwf_nodes']
   become: true
 
-- name: remove /tmp/n3iwf-config.yaml
+- name: remove the rendered n3iwf config, key and certificate
   file:
-    path: "/tmp/n3iwf-config.yaml"
+    path: "{{ item }}"
     state: absent
-  when: inventory_hostname in groups['n3iwf_nodes']
-  become: true
-
-- name: remove /tmp/n3iwf.crt
-  file:
-    path: "/tmp/n3iwf.crt"
-    state: absent
-  when: inventory_hostname in groups['n3iwf_nodes']
-  become: true
-
-- name: remove /tmp/n3iwf.key
-  file:
-    path: "/tmp/n3iwf.key"
-    state: absent
+  loop:
+    - /var/lib/n3iwf/n3iwf-config.yaml
+    - /var/lib/n3iwf/n3iwf.key
+    - /var/lib/n3iwf/n3iwf.crt
+    # the pre-/var/lib locations, cleaned up on upgrade
+    - /tmp/n3iwf-config.yaml
+    - /tmp/n3iwf.key
+    - /tmp/n3iwf.crt
   when: inventory_hostname in groups['n3iwf_nodes']
   become: true
 
