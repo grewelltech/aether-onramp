@@ -5,3 +5,13 @@
 # first boot can take longer and time out even though the reboot itself
 # succeeded; raise this for them via group_vars, host_vars, or -e.
 dpdk_reboot_timeout: 300
+
+# Whether a fronthaul NIC on a different NUMA node from the isolated CPUs is
+# an error. OCUDU places the OFH mbuf pool on the socket of the lcore that
+# runs DPDK init and the Rx/Tx descriptor rings on the device's own socket, so
+# a mismatch puts the payload and the descriptors on opposite sides of the
+# interconnect for every fronthaul frame. It is a misconfiguration rather
+# than a host limitation, so the default is to stop. Set it false to carry on
+# with a warning -- for a host where the NIC cannot be moved and the jitter
+# is accepted.
+ocudu_dpdk_numa_strict: true

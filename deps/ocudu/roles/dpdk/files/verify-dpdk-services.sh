@@ -132,6 +132,79 @@ check_hugepages() {
   fi
 }
 
+# The check above reads the system-wide 1G count, which on a two-socket host
+# passes while the node that carries the fronthaul NIC holds half of it. OCUDU
+# puts the OFH mbuf pool on the socket of the lcore that runs DPDK init and the
+# descriptor rings on the device's socket, so what matters is that the isolated
+# CPUs and the pages are on the NIC's node. Nothing in OCUDU corrects a
+# mismatch: the shipped image is built without -DENABLE_LIBNUMA, so it cannot
+# even map CPUs to nodes.
+check_numa_alignment() {
+  local pf_iface=$1
+  local isolated=$2
+  local node cpulist free_pages stray
+
+  node=$(cat "/sys/class/net/${pf_iface}/device/numa_node" 2>/dev/null || true)
+  node=$(trim "${node:-}")
+  if [[ ! "$node" =~ ^[0-9]+$ ]]; then
+    pass "fronthaul NIC ${pf_iface} reports no NUMA node; nothing to align"
+    return
+  fi
+
+  cpulist=$(cat "/sys/devices/system/node/node${node}/cpulist" 2>/dev/null || true)
+  cpulist=$(trim "${cpulist:-}")
+  if [[ -z "$cpulist" ]]; then
+    warn "cannot read the CPU list of NUMA node ${node}; skipping alignment check"
+  elif [[ -z "$isolated" ]]; then
+    warn "isolated CPU set unknown; pass --isolated <cpus> to check NUMA alignment"
+  elif ! stray=$(cpus_outside "$isolated" "$cpulist"); then
+    warn "cannot parse the isolated CPU set '${isolated}'; skipping alignment check"
+  elif [[ -z "$stray" ]]; then
+    pass "isolated CPUs ${isolated} are all on node ${node}, the fronthaul NIC's node"
+  else
+    fail "fronthaul NIC ${pf_iface} is on NUMA node ${node} (CPUs ${cpulist}) but isolated CPUs ${stray} are not: the OFH timing, TX/RX and main-pool threads run cross-socket from the device they drive"
+  fi
+
+  free_pages=$(cat "/sys/devices/system/node/node${node}/hugepages/hugepages-1048576kB/free_hugepages" 2>/dev/null || true)
+  free_pages=$(trim "${free_pages:-}")
+  if [[ ! "$free_pages" =~ ^[0-9]+$ ]]; then
+    warn "cannot read free 1G hugepages on NUMA node ${node}"
+  elif (( free_pages >= 2 )); then
+    pass "NUMA node ${node} has ${free_pages} free 1G hugepages"
+  else
+    fail "NUMA node ${node} carries the fronthaul NIC but has ${free_pages} free 1G hugepage(s); OCUDU's DPDK guide asks for 2G for one 4x2 100MHz sector, and a boot-time hugepages=N is split evenly across nodes"
+  fi
+}
+
+# Prints the members of $1 that are not in $2, as a compact comma list.
+cpus_outside() {
+  local spec=$1
+  local allowed=$2
+  python3 - "$spec" "$allowed" <<'PYEOF'
+import sys
+
+
+def expand(text):
+    cpus = set()
+    for part in text.replace(" ", "").split(","):
+        if not part:
+            continue
+        if "-" in part:
+            first, last = part.split("-")[:2]
+            cpus.update(range(int(first), int(last) + 1))
+        else:
+            cpus.add(int(part))
+    return cpus
+
+
+try:
+    stray = sorted(expand(sys.argv[1]) - expand(sys.argv[2]))
+except ValueError:
+    sys.exit(1)
+print(",".join(str(cpu) for cpu in stray))
+PYEOF
+}
+
 resolve_vf_bdf() {
   local pf_iface=$1
   local vf_sysfs
@@ -248,16 +321,18 @@ check_recent_logs() {
 
 usage() {
   cat <<'EOF'
-Usage: verify-dpdk-services.sh [--pf IFACE]
+Usage: verify-dpdk-services.sh [--pf IFACE] [--isolated CPUS]
 
 Verifies the OCUDU DPDK host preparation performed by make ocudu-dpdk-install.
 Defaults:
-  --pf      auto-detect from OCUDU ptp4l unit ExecStart
+  --pf        auto-detect from OCUDU ptp4l unit ExecStart
+  --isolated  unset; without it the NUMA alignment check is skipped
 EOF
 }
 
 main() {
   local pf_iface=""
+  local isolated_cpus=""
   local phc_device
   local vf_bdf=""
 
@@ -265,6 +340,10 @@ main() {
     case "$1" in
       --pf)
         pf_iface=${2:-}
+        shift 2
+        ;;
+      --isolated)
+        isolated_cpus=${2:-}
         shift 2
         ;;
       -h|--help)
@@ -285,6 +364,7 @@ main() {
   require_command ip || exit 2
   require_command ethtool || exit 2
   require_command journalctl || exit 2
+  require_command python3 || exit 2
 
   check_marker
   check_unit_enabled_active vf-bootstrap.service active
@@ -303,6 +383,7 @@ main() {
     pass "PF interface detected: $pf_iface"
     vf_bdf=$(resolve_vf_bdf "$pf_iface" || true)
     check_hugepages
+    check_numa_alignment "$pf_iface" "$(trim "$isolated_cpus")"
     check_driver_binding "$pf_iface"
     check_pf_tuning "$pf_iface"
   else
