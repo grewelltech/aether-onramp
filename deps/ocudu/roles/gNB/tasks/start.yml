@@ -90,21 +90,29 @@
   ansible.builtin.set_fact:
     server_dpdk_enabled: "{{ (server_dpdk.enabled | default((ocudu.dpdk | default({})).enabled | default(false))) | bool }}"
     isolated_cpus: "{{ server_dpdk.isolated_cpus | default(((ocudu.dpdk | default({})).isolated_cpus | default('3-23')), true) }}"
+    extra_eal_args: "{{ server_dpdk.extra_eal_args | default(((ocudu.dpdk | default({})).extra_eal_args | default('')), true) }}"
   when: inventory_hostname in groups['ocudu_nodes']
 
-- name: compute OFH and DU-High CPU pinning from isolated range
+- name: plan the DPDK CPU placement for gNB start
+  ansible.builtin.include_role:
+    name: dpdk
+    tasks_from: resolve_dpdk_cpu_plan
+  when:
+    - inventory_hostname in groups['ocudu_nodes']
+    - server_dpdk_enabled
+
+- name: compute OFH and DU-High CPU pinning from the isolated set
   ansible.builtin.set_fact:
-    ofh_timing_cpu: "{{ cpu_pin_override.ofh_timing_cpu | default(isolated_cpus.split('-')[0]) }}"
-    ofh_txrx_cpu: "{{ cpu_pin_override.ofh_txrx_cpu | default(isolated_cpus.split('-')[0] | int + 1) }}"
-    du_high_cpus: "{{ cpu_pin_override.du_high_cpus | default((isolated_cpus.split('-')[0] | int + 2) ~ '-' ~ isolated_cpus.split('-')[-1]) }}"
+    ofh_timing_cpu: "{{ cpu_pin_override.ofh_timing_cpu | default(ocudu_dpdk_cpu_plan.timing_cpu) }}"
+    ofh_txrx_cpu: "{{ cpu_pin_override.ofh_txrx_cpu | default(ocudu_dpdk_cpu_plan.txrx_cpu) }}"
+    du_high_cpus: "{{ cpu_pin_override.du_high_cpus | default(ocudu_dpdk_cpu_plan.du_high_cpus) }}"
     pinned_cpuset: "{{ isolated_cpus }}"
   vars:
     cpu_pin_override: "{{ server_dpdk.cpu_pinning | default((ocudu.dpdk | default({})).cpu_pinning | default({})) }}"
   when:
     - inventory_hostname in groups['ocudu_nodes']
     - server_dpdk_enabled
-    - (isolated_cpus.split('-') | length) == 2
-    - (isolated_cpus.split('-')[-1] | int) - (isolated_cpus.split('-')[0] | int) >= 3
+    - ocudu_dpdk_cpu_plan.usable | bool
 
 - name: discover VF identifiers for DPDK gNB start
   ansible.builtin.include_role:

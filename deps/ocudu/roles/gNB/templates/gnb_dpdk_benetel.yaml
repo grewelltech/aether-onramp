@@ -69,7 +69,7 @@ cell_cfg:
 
 hal:
 {% if ofh_timing_cpu is defined %}
-  eal_args: "--lcores 0@{{ ofh_timing_cpu }},1@{{ ofh_txrx_cpu }}"
+  eal_args: "--lcores 0@{{ ofh_timing_cpu }},1@{{ ofh_txrx_cpu }}{{ ' ' ~ extra_eal_args | trim if extra_eal_args | default('') | trim != '' else '' }}"
 
 expert_execution:
   threads:
@@ -82,7 +82,7 @@ expert_execution:
     main_pool_cpus: "{{ du_high_cpus }}"
     main_pool_pinning: round-robin
 {% else %}
-  eal_args: "--lcores (0-1)@({{ isolated_cpus }})"
+  eal_args: "--lcores (0-1)@({{ isolated_cpus }}){{ ' ' ~ extra_eal_args | trim if extra_eal_args | default('') | trim != '' else '' }}"
 {% endif %}
 
 log:

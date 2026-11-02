@@ -23,7 +23,11 @@ ocudu:
         du_mac_addr: ""                  # Optional VF 0 MAC override; auto-discovered if left empty
         vf_bdf: ""                       # Optional VF 0 PCI BDF override; auto-discovered if left empty
         ru_mac_addr: "70:b3:d5:e1:5e:7e" # Benetel RU fronthaul port MAC
-        isolated_cpus: "3-23"            # CPUs isolated for DPDK/gNB (isolcpus, cpuset, eal_args).
+        extra_eal_args: ""               # Optional EAL arguments appended to hal.eal_args, e.g.
+                                         # "--socket-mem 0,2048 --socket-limit 0,2048"
+        isolated_cpus: "3-23"            # CPUs isolated for DPDK/gNB (isolcpus, irqaffinity, cpuset,
+                                         # eal_args). Any Linux CPU list, so "28-55,84-111" isolates a
+                                         # NUMA node's cores together with their SMT siblings.
                                          # On a multi-socket host these must be on the same NUMA
                                          # node as pf_iface; see "NUMA placement of the DPDK
                                          # fronthaul" in README.md. The role checks this and stops
