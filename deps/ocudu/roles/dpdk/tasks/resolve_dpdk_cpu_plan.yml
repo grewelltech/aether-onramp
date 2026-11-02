@@ -1,0 +1,36 @@
+---
+# Derive the OFH and DU-High placement, and the housekeeping CPUs, from the
+# isolated set.
+#
+# This used to be done inline with Jinja string surgery on isolated_cpus:
+# split('-')[0] for the timing CPU, +1 for TX/RX, and (+2)-(last) for the
+# DU-High pool, all guarded by `split('-') | length == 2`. That only ever
+# accepted a single contiguous A-B range, which cannot express a NUMA node's
+# CPUs -- `28-55,84-111` once SMT is on -- so a correctly aligned host could
+# not isolate cores and their siblings together. A CPU list is not something
+# Jinja expands and re-compacts readably, so the arithmetic moved to a script.
+#
+# Requires isolated_cpus to be set by the caller.
+
+- name: plan the DPDK CPU placement
+  ansible.builtin.script: >-
+    {{ role_path }}/files/dpdk-cpu-plan.py
+    {{ isolated_cpus | quote }}
+  args:
+    executable: python3
+  register: ocudu_dpdk_cpu_plan_probe
+  changed_when: false
+
+- name: resolve the DPDK CPU placement
+  ansible.builtin.set_fact:
+    ocudu_dpdk_cpu_plan: "{{ ocudu_dpdk_cpu_plan_probe.stdout | from_json }}"
+
+- name: fail when the isolated set is too small to place the OFH and DU-High threads
+  ansible.builtin.fail:
+    msg: >-
+      isolated_cpus is {{ isolated_cpus }}, which expands to
+      {{ ocudu_dpdk_cpu_plan.isolated | length }} CPU(s). The OFH timing
+      thread, the OFH TX/RX thread and the DU-High pool need at least four
+      between them. Widen
+      ocudu.servers[{{ server_index }}].dpdk.isolated_cpus.
+  when: not (ocudu_dpdk_cpu_plan.usable | bool)

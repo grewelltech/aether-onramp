@@ -38,6 +38,12 @@
     - ocudu_dpdk_pf_iface | trim != ''
     - ocudu_dpdk_numa_node_stat.stat.exists | default(false)
 
+# The housekeeping CPUs come from the same plan the gNB role pins the OFH and
+# DU-High threads with, so irqaffinity below is the exact complement of the
+# isolated set rather than a second, hand-kept list.
+- name: plan the DPDK CPU placement
+  ansible.builtin.include_tasks: resolve_dpdk_cpu_plan.yml
+
 - name: fail when requested 1G hugepages count is invalid for DPDK mode
   ansible.builtin.fail:
     msg: >-
@@ -88,12 +94,20 @@
     DESIRED_PAGES="{{ desired_hugepages | default(2, true) | int }}"
     CURRENT=$(grep '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_FILE" | sed 's/GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/\1/')
     CURRENT_NORMALIZED=$(printf '%s\n' "$CURRENT" | awk '{$1=$1; print}')
-    FILTERED=$(printf '%s\n' "$CURRENT_NORMALIZED" | tr ' ' '\n' | awk 'NF && $0 !~ /^(isolcpus|rcu_nocbs|nohz_full|default_hugepagesz|hugepagesz|hugepages)=/')
+    FILTERED=$(printf '%s\n' "$CURRENT_NORMALIZED" | tr ' ' '\n' | awk 'NF && $0 !~ /^(isolcpus|rcu_nocbs|nohz_full|irqaffinity|default_hugepagesz|hugepagesz|hugepages)=/')
     PARAMS=(
       "isolcpus={{ cpu_range }}"
       "rcu_nocbs={{ cpu_range }}"
       "nohz_full={{ cpu_range }}"
     )
+    # Isolating the CPUs does not move device interrupts off them; without
+    # irqaffinity the kernel is still free to deliver an IRQ to an isolated
+    # core and preempt the OFH timing thread. Pin them to the complement of
+    # the isolated set. Left out when the plan found no housekeeping CPUs,
+    # since an empty irqaffinity mask is rejected at boot.
+    if [ -n "{{ housekeeping_cpus }}" ]; then
+      PARAMS+=( "irqaffinity={{ housekeeping_cpus }}" )
+    fi
     if [ "$DESIRED_PAGES" -gt 0 ]; then
       # A bare hugepages=N is spread evenly over the NUMA nodes, so on a
       # two-socket host hugepages=2 leaves one 1G page per node and the
@@ -132,6 +146,7 @@
     server_index: "{{ groups['ocudu_nodes'].index(inventory_hostname) }}"
     server_dpdk: "{{ ocudu.servers[groups['ocudu_nodes'].index(inventory_hostname)].dpdk | default({}) }}"
     cpu_range: "{{ server_dpdk.isolated_cpus | default(((ocudu.dpdk | default({})).isolated_cpus | default('3-23')), true) }}"
+    housekeeping_cpus: "{{ (ocudu_dpdk_cpu_plan | default({})).housekeeping | default('') }}"
     desired_hugepages: "{{ server_dpdk.hugepages | default(((ocudu.dpdk | default({})).hugepages | default(2)), true) }}"
     hugepage_node: >-
       {{

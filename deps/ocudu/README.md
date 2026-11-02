@@ -232,6 +232,26 @@ cat /sys/class/net/<pf_iface>/device/numa_node        # e.g. 1
 cat /sys/devices/system/node/node1/cpulist            # e.g. 28-55,84-111
 ```
 
+`isolated_cpus` takes any Linux CPU list, so that whole string can be used as it stands
+and the node's cores and their SMT siblings are isolated together. From the isolated set
+the role derives the OFH timing CPU (the lowest), the OFH TX/RX CPU (the next), the
+DU-High pool (the rest), and `irqaffinity` for every CPU that is left over, so device
+interrupts are kept off the isolated cores. `ocudu.servers[n].dpdk.cpu_pinning` still
+overrides any of the three individually.
+
+`ocudu.servers[n].dpdk.extra_eal_args` is appended to `hal.eal_args`, for EAL arguments
+the template does not build itself:
+
+```yaml
+extra_eal_args: "--socket-mem 0,2048 --socket-limit 0,2048"
+```
+
+`--socket-mem` is a per-socket budget and EAL fails to start if it cannot be met, which
+makes it a useful hard gate once the lcores are already on the NIC's node. It is not a
+substitute for that: asking for memory only on the NIC's node while the lcores sit
+elsewhere leaves DPDK's heap for *their* socket empty, and the mbuf pool create then
+exits.
+
 ### Start the gNB
 
 ```bash
