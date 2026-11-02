@@ -10,6 +10,34 @@
     server_index: "{{ groups['ocudu_nodes'].index(inventory_hostname) }}"
     server_dpdk: "{{ ocudu.servers[groups['ocudu_nodes'].index(inventory_hostname) | int].dpdk | default({}) }}"
 
+# The fronthaul NIC's node decides where the isolated CPUs and the hugepages
+# belong, and the GRUB line below writes both. Resolve it before that, from the
+# PF alone: the VF does not exist yet this early, and it inherits the PF's node.
+- name: resolve fronthaul PF and isolated CPUs for NUMA placement
+  ansible.builtin.set_fact:
+    ocudu_dpdk_pf_iface: >-
+      {{
+        server_dpdk.pf_iface |
+        default(((ocudu.dpdk | default({})).pf_iface | default('')), true)
+      }}
+    isolated_cpus: "{{ server_dpdk.isolated_cpus | default(((ocudu.dpdk | default({})).isolated_cpus | default('3-23')), true) }}"
+
+- name: check whether the fronthaul PF is present for the NUMA probe
+  ansible.builtin.stat:
+    path: "/sys/class/net/{{ ocudu_dpdk_pf_iface }}/device/numa_node"
+  register: ocudu_dpdk_numa_node_stat
+  changed_when: false
+  when: ocudu_dpdk_pf_iface | trim != ''
+
+# A PF that is absent or nameless is reported by resolve_dpdk_vf further down,
+# with a message naming the variable to set; nothing is gained by failing twice,
+# so the probe is simply skipped and the hugepages stay node-agnostic.
+- name: resolve fronthaul NUMA placement
+  ansible.builtin.include_tasks: resolve_dpdk_numa.yml
+  when:
+    - ocudu_dpdk_pf_iface | trim != ''
+    - ocudu_dpdk_numa_node_stat.stat.exists | default(false)
+
 - name: fail when requested 1G hugepages count is invalid for DPDK mode
   ansible.builtin.fail:
     msg: >-
@@ -36,7 +64,7 @@
     grep -qE '(^| )rcu_nocbs=[^[:space:]]' /proc/cmdline && \
     grep -qE '(^| )nohz_full=[^[:space:]]' /proc/cmdline && \
     grep -qE '(^| )hugepagesz=1G( |$)' /proc/cmdline && \
-    grep -qE '(^| )hugepages=[1-9][0-9]*( |$)' /proc/cmdline && \
+    grep -qE '(^| )hugepages=([1-9][0-9]*|[0-9]+:[0-9]+(,[0-9]+:[0-9]+)*)( |$)' /proc/cmdline && \
     echo yes || echo no
   args:
     executable: /bin/bash
@@ -67,10 +95,20 @@
       "nohz_full={{ cpu_range }}"
     )
     if [ "$DESIRED_PAGES" -gt 0 ]; then
+      # A bare hugepages=N is spread evenly over the NUMA nodes, so on a
+      # two-socket host hugepages=2 leaves one 1G page per node and the
+      # fronthaul node gets half of what OCUDU's DPDK guide asks for. The
+      # node format puts them all where the NIC is. Only used when the node is
+      # known and there is more than one, so a single-socket host keeps the
+      # plain form.
+      HUGEPAGES_SPEC="${DESIRED_PAGES}"
+      if [ -n "{{ hugepage_node }}" ]; then
+        HUGEPAGES_SPEC="{{ hugepage_node }}:${DESIRED_PAGES}"
+      fi
       PARAMS+=(
         "default_hugepagesz=1G"
         "hugepagesz=1G"
-        "hugepages=${DESIRED_PAGES}"
+        "hugepages=${HUGEPAGES_SPEC}"
       )
     fi
     UPDATED=$(printf '%s\n' "$FILTERED" "${PARAMS[@]}" | awk 'NF' | paste -sd' ' -)
@@ -95,6 +133,13 @@
     server_dpdk: "{{ ocudu.servers[groups['ocudu_nodes'].index(inventory_hostname)].dpdk | default({}) }}"
     cpu_range: "{{ server_dpdk.isolated_cpus | default(((ocudu.dpdk | default({})).isolated_cpus | default('3-23')), true) }}"
     desired_hugepages: "{{ server_dpdk.hugepages | default(((ocudu.dpdk | default({})).hugepages | default(2)), true) }}"
+    hugepage_node: >-
+      {{
+        ocudu_dpdk_numa.node
+        if ((ocudu_dpdk_numa | default({})).node | default(-1) | int >= 0
+            and (ocudu_dpdk_numa | default({})).nof_nodes | default(1) | int > 1)
+        else ''
+      }}
 
 - name: update GRUB after cmdline change
   ansible.builtin.command: update-grub
