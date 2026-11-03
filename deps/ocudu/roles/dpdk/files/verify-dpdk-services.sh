@@ -219,13 +219,13 @@ check_pf_tuning() {
   fi
 
   pause_output=$(ethtool -a "$pf_iface" 2>/dev/null || true)
-  if grep -Eq '^TX:[[:space:]]+on$' <<<"$pause_output"; then
-    fail "$pf_iface sends pause frames (TX on), expected rx on tx off"
-  elif grep -Eq '^RX:[[:space:]]+on$' <<<"$pause_output" &&
+  if grep -Eq '^(RX|TX):[[:space:]]+on$' <<<"$pause_output"; then
+    fail "$pf_iface has pause on, expected rx off tx off"
+  elif grep -Eq '^RX:[[:space:]]+off$' <<<"$pause_output" &&
        grep -Eq '^TX:[[:space:]]+off$' <<<"$pause_output"; then
-    pass "$pf_iface pause parameters have RX on and TX off"
+    pass "$pf_iface pause parameters have RX/TX off"
   else
-    warn "could not confirm pause parameters RX on / TX off for $pf_iface"
+    warn "could not confirm pause parameters RX/TX off for $pf_iface"
   fi
 }
 

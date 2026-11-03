@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Guards on 802.3x pause on the OCUDU fronthaul PF.
 
-The PF honours pause frames from its peer but never sends them. On an E810
-PF with an SR-IOV VF, sending pause stops the VF's transmit for good once the
-port asserts XOFF, and a 7.2 fronthaul has no use for a delayed frame anyway.
+The PF neither sends nor honours pause. A 7.2 fronthaul frame that is held
+back misses its reception window, and pause halts the PTP on the same port.
+On an E810 PF with an SR-IOV VF, sending pause also stops the VF's transmit
+for good once the port asserts XOFF.
 
 The verifier's pause check is run against canned `ethtool -a` output, in the
 tab-separated layout ethtool prints, with ethtool stubbed on PATH, so none of
@@ -67,24 +68,24 @@ def pause_verdict(tmp_path, pause_output):
     return lines[0]
 
 
-def test_pf_tuning_honours_pause_and_never_sends_it():
+def test_pf_tuning_turns_pause_off():
     with open(TEMPLATE) as f:
         commands = [line for line in f if re.match(r"ExecStart=ethtool -A ", line)]
     assert len(commands) == 1
-    assert commands[0].split()[-4:] == ["rx", "on", "tx", "off"]
+    assert commands[0].split()[-4:] == ["rx", "off", "tx", "off"]
 
 
 @pytest.mark.parametrize(
     "output, verdict",
     [
-        (ethtool_a("on", "off"), "PASS"),
-        (ethtool_a("on", "off", negotiated=("on", "on")), "PASS"),
+        (ethtool_a("off", "off"), "PASS"),
+        (ethtool_a("off", "off", negotiated=("on", "on")), "PASS"),
         (ethtool_a("on", "on"), "FAIL"),
+        (ethtool_a("on", "off"), "FAIL"),
         (ethtool_a("off", "on"), "FAIL"),
-        (ethtool_a("off", "off"), "WARN"),
         ("", "WARN"),
     ],
-    ids=["rx-on-tx-off", "negotiated-lines-ignored", "rx-on-tx-on", "rx-off-tx-on", "rx-off-tx-off", "no-output"],
+    ids=["rx-off-tx-off", "negotiated-lines-ignored", "rx-on-tx-on", "rx-on-tx-off", "rx-off-tx-on", "no-output"],
 )
 def test_verifier_pause_check(tmp_path, output, verdict):
     assert pause_verdict(tmp_path, output).startswith(f"{verdict}:")
