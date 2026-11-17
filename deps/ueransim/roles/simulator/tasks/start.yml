@@ -22,18 +22,25 @@
     fail_msg: "UERANSIM currently requires Docker host networking so uesimtun0 is visible on the host."
   when: inventory_hostname in groups['ueransim_nodes']
 
+# /tmp is world-writable and does not survive a reboot, and custom-ue.yaml
+# carries the UE's milenage key material.
 - name: create UERANSIM config directory
   file:
-    path: /tmp/ueransim
+    path: /var/lib/ueransim/conf
     state: directory
-    mode: '0755'
+    owner: root
+    group: root
+    mode: '0700'
   when: inventory_hostname in groups['ueransim_nodes']
   become: true
 
 - name: copy gNb config files to ueransim host
   template:
     src: "{{ ROOT_DIR }}/{{ ueransim.servers[server_index | int].gnb }}"
-    dest: /tmp/ueransim/custom-gnb.yaml
+    dest: /var/lib/ueransim/conf/custom-gnb.yaml
+    owner: root
+    group: root
+    mode: '0644'
   vars:
     server_index: "{{ groups['ueransim_nodes'].index(inventory_hostname) }}"
   when: inventory_hostname in groups['ueransim_nodes']
@@ -42,7 +49,11 @@
 - name: copy UE config files to ueransim host
   template:
     src: "{{ ROOT_DIR }}/{{ ueransim.servers[server_index | int].ue }}"
-    dest: /tmp/ueransim/custom-ue.yaml
+    dest: /var/lib/ueransim/conf/custom-ue.yaml
+    owner: root
+    group: root
+    # carries the UE's milenage key material
+    mode: '0600'
   vars:
     server_index: "{{ groups['ueransim_nodes'].index(inventory_hostname) }}"
   when: inventory_hostname in groups['ueransim_nodes']
@@ -61,7 +72,7 @@
     image: "{{ ueransim.docker.container.image }}"
     network_mode: "{{ ueransim.docker.network.name }}"
     volumes:
-      - /tmp/ueransim:/opt/ueransim/config
+      - /var/lib/ueransim/conf:/opt/ueransim/config:ro
     privileged: true
     state: started
     detach: true

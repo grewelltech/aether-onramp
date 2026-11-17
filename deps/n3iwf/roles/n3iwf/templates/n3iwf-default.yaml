@@ -31,9 +31,9 @@ configuration:
   gtpBindAddress: "{{ n3_ip }}"
   nasTcpPort: 20000
   fqdn: n3iwf.aether.org
-  privateKey: /opt/n3iwf.key
-  certificateAuthority: /opt/n3iwf.crt
-  certificate: /opt/n3iwf.crt
+  privateKey: /etc/n3iwf/n3iwf.key
+  certificateAuthority: /etc/n3iwf/n3iwf.crt
+  certificate: /etc/n3iwf/n3iwf.crt
   livenessCheck:
     enable: true
     transFreq: 60s

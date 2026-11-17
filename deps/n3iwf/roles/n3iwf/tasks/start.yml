@@ -25,17 +25,31 @@
   when: inventory_hostname in groups['n3iwf_nodes']
   become: true
 
-- name: remove /tmp/n3iwf-config.yaml
+# The config, the private key and the certificate all lived in /tmp, which is
+# world-writable (1777) and does not survive a reboot. The key generation below
+# is guarded by `creates:`, so with the key in /tmp an unprivileged local user
+# could place /tmp/n3iwf.key first, keep ownership of it, have the generation
+# skip, and have the role mount their key into the container as its identity.
+# A root-owned 0700 directory removes that window: only root can place a file
+# there, so `creates:` is safe to keep for idempotency.
+- name: create the N3IWF state directory
   file:
-    path: /tmp/n3iwf-config.yaml
-    state: absent
+    path: /var/lib/n3iwf
+    state: directory
+    owner: root
+    group: root
+    # holds the private key, so not traversable by anyone else
+    mode: '0700'
   when: inventory_hostname in groups['n3iwf_nodes']
   become: true
 
-- name: copy n3iwf config file to /tmp/n3iwf-config.yaml
+- name: render the n3iwf config to /var/lib/n3iwf/n3iwf-config.yaml
   template:
     src: "{{ ROOT_DIR }}/{{ n3iwf.servers[server_index | int].conf_file }}"
-    dest: /tmp/n3iwf-config.yaml
+    dest: /var/lib/n3iwf/n3iwf-config.yaml
+    owner: root
+    group: root
+    mode: '0644'
   vars:
     server_index: "{{ groups['n3iwf_nodes'].index(inventory_hostname) }}"
     n3iwf_ip: "{{ n3iwf.servers[server_index | int].n3iwf_ip }}"
@@ -48,17 +62,28 @@
 
 - name: generate private key
   command: >
-    openssl genrsa -out /tmp/n3iwf.key 2048
+    openssl genrsa -out /var/lib/n3iwf/n3iwf.key 2048
   args:
-    creates: "/tmp/n3iwf.key"
+    creates: "/var/lib/n3iwf/n3iwf.key"
+  when: inventory_hostname in groups['n3iwf_nodes']
+  become: true
+
+# openssl already writes 0600, but state it rather than depend on it, and
+# correct a key carried over from an earlier layout.
+- name: enforce ownership and mode on the private key
+  file:
+    path: /var/lib/n3iwf/n3iwf.key
+    owner: root
+    group: root
+    mode: '0600'
   when: inventory_hostname in groups['n3iwf_nodes']
   become: true
 
 - name: generate self-signed certificate
   command: >
-    openssl req -new -x509 -key /tmp/n3iwf.key -out /tmp/n3iwf.crt -days 365 -subj "/C=US/ST=State/L=City/O=Organization/OU=Unit/CN=aetherproject.org"
+    openssl req -new -x509 -key /var/lib/n3iwf/n3iwf.key -out /var/lib/n3iwf/n3iwf.crt -days 365 -subj "/C=US/ST=State/L=City/O=Organization/OU=Unit/CN=aetherproject.org"
   args:
-    creates: "/tmp/n3iwf.crt"
+    creates: "/var/lib/n3iwf/n3iwf.crt"
   when: inventory_hostname in groups['n3iwf_nodes']
   become: true
 
@@ -66,13 +91,12 @@
   community.docker.docker_container:
     name: "n3iwf"
     image: "{{ n3iwf.docker.image }}"
-    command: n3iwf -cfg /opt/n3iwf-config.yaml
+    command: n3iwf -cfg /etc/n3iwf/n3iwf-config.yaml
     networks:
       - name: "{{ n3iwf.docker.network.name }}"
     volumes:
-      - /tmp/n3iwf-config.yaml:/opt/n3iwf-config.yaml
-      - /tmp/n3iwf.key:/opt/n3iwf.key
-      - /tmp/n3iwf.crt:/opt/n3iwf.crt
+      # one directory mount instead of three single-file mounts
+      - /var/lib/n3iwf:/etc/n3iwf
     privileged: true
     state: started
     detach: true
