@@ -116,6 +116,14 @@
     - inventory_hostname in groups['ocudu_nodes']
     - server_dpdk_enabled
 
+- name: resolve fronthaul NUMA placement for DPDK gNB start
+  ansible.builtin.include_role:
+    name: dpdk
+    tasks_from: resolve_dpdk_numa
+  when:
+    - inventory_hostname in groups['ocudu_nodes']
+    - server_dpdk_enabled
+
 - name: render gNB config to /var/lib/ocudu/conf/gnb_config.yaml
   template:
     src: "{{ ocudu.servers[server_index | int].gnb_conf }}"
@@ -147,6 +155,13 @@
     devices:
       - /dev/vfio:/dev/vfio
     cpuset_cpus: "{{ isolated_cpus if server_dpdk_enabled else omit }}"
+    # Bind the container's memory to the fronthaul NIC's node as well, so the
+    # OFH mbuf pool cannot be faulted in on the far node. It is a guard rather
+    # than a fix -- OCUDU already derives the pool's socket from the lcore that
+    # runs init -- and it is only safe because cpuset_cpus above is on that
+    # same node: restricting mems alone would leave DPDK's heap for the
+    # lcores' socket empty and the pool create would rte_exit.
+    cpuset_mems: "{{ ocudu_dpdk_numa.node if (server_dpdk_enabled and (ocudu_dpdk_numa | default({})).node | default(-1) | int >= 0) else omit }}"
     capabilities:
       - SYS_NICE
       - IPC_LOCK

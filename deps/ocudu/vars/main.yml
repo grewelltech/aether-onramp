@@ -23,7 +23,11 @@ ocudu:
         du_mac_addr: ""                  # Optional VF 0 MAC override; auto-discovered if left empty
         vf_bdf: ""                       # Optional VF 0 PCI BDF override; auto-discovered if left empty
         ru_mac_addr: "70:b3:d5:e1:5e:7e" # Benetel RU fronthaul port MAC
-        isolated_cpus: "3-23"            # CPUs isolated for DPDK/gNB (isolcpus, cpuset, eal_args)
+        isolated_cpus: "3-23"            # CPUs isolated for DPDK/gNB (isolcpus, cpuset, eal_args).
+                                         # On a multi-socket host these must be on the same NUMA
+                                         # node as pf_iface; see "NUMA placement of the DPDK
+                                         # fronthaul" in README.md. The role checks this and stops
+                                         # on a mismatch unless ocudu_dpdk_numa_strict is false.
 
 core:
   amf:

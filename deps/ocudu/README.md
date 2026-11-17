@@ -187,6 +187,7 @@ The verifier checks:
 - `pf-tuning.service`, `ocudu-runtime-tuning.service`, `ocudu-ptp4l.service`, and `ocudu-phc2sys.service` are enabled and active
 - conflicting time synchronization services are disabled
 - 1G hugepages are present
+- the isolated CPUs and the fronthaul NIC are on the same NUMA node, and that node has at least two free 1G hugepages
 - a VF is bound to `vfio-pci`
 - the PF interface tuning from `pf-tuning.service` is visible on the live interface
 
@@ -197,7 +198,38 @@ The playbook fans out to each DPDK-enabled OCUDU host through role-backed task f
 If you want to run the same checks directly on a single OCUDU host for debugging, use the script locally:
 
 ```bash
-./roles/dpdk/files/verify-dpdk-services.sh --pf <pf_iface>
+./roles/dpdk/files/verify-dpdk-services.sh --pf <pf_iface> --isolated <isolated_cpus>
+```
+
+Without `--isolated` the NUMA alignment check is skipped; the hugepage count for the NIC's node is still checked.
+
+### NUMA placement of the DPDK fronthaul
+
+On a multi-socket host the fronthaul NIC, the DPDK lcores, the DU thread pool and the
+hugepages backing them all have to be on one NUMA node. OCUDU splits its DPDK memory
+between two different rules: the OFH mbuf pool is created on the socket of the lcore that
+runs DPDK init, while the Rx and Tx descriptor rings are placed on the device's own socket.
+Pin the lcores to a node other than the NIC's and every fronthaul frame is built by a
+far-node core into far-node memory and then read by the NIC across the interconnect.
+
+OCUDU does not correct this itself, so the role does:
+
+- the node is read from `/sys/class/net/<pf_iface>/device/numa_node`;
+- `isolated_cpus` must fall inside that node's CPU list, or the run stops. Set
+  `ocudu_dpdk_numa_strict: false` to continue with a warning instead;
+- the 1G hugepages go on that node, via the kernel's per-node `hugepages=<node>:<count>`
+  boot form rather than a bare `hugepages=<count>`, which the kernel spreads evenly over
+  the nodes and so would leave the fronthaul node with half of them;
+- the gNB container gets `cpuset_mems` set to that node alongside `cpuset_cpus`.
+
+A host that reports no node for the NIC, which is what a single socket looks like, skips
+all of this.
+
+So on a two-socket host, pick `isolated_cpus` from the NIC's node:
+
+```bash
+cat /sys/class/net/<pf_iface>/device/numa_node        # e.g. 1
+cat /sys/devices/system/node/node1/cpulist            # e.g. 28-55,84-111
 ```
 
 ### Start the gNB

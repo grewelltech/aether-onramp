@@ -1,0 +1,93 @@
+---
+# Resolve the fronthaul NIC's NUMA node and check the isolated CPUs share it.
+#
+# Why this matters, from OCUDU's own source (gitlab.com/ocudu/ocudu,
+# lib/ofh/ethernet/dpdk/dpdk_ethernet_port_context.cpp): the OFH mbuf pool is
+# created with `rte_pktmbuf_pool_create(..., rte_socket_id())`, so it lands on
+# the socket of whichever lcore runs DPDK init -- which is what `--lcores` and
+# this role's `cpuset_cpus` decide. The Rx and Tx descriptor rings, however,
+# are set up with `rte_eth_{rx,tx}_queue_setup(..., rte_eth_dev_socket_id(
+# port_id), ...)`, on the *device's* socket. Pin the lcores to another node and
+# every fronthaul frame is built by a far-node core into far-node memory and
+# then read by the NIC across the interconnect.
+#
+# OCUDU does not correct this itself. `cpu_architecture_info::run_on_numa_node()`
+# would (it is a `numa_bind()`), but it has no callers, and the shipped
+# aetherproject/ocudu image is built without `-DENABLE_LIBNUMA`, so
+# `NUMA_SUPPORT` is undefined: OCUDU counts the nodes by globbing
+# /sys/devices/system/node/node* and never learns which CPUs belong to which.
+# Placement is therefore entirely up to the deployer, which is this role.
+#
+# Requires ocudu_dpdk_pf_iface and isolated_cpus to be set by the caller.
+
+- name: probe the fronthaul NIC's NUMA node
+  ansible.builtin.script: >-
+    {{ role_path }}/files/dpdk-numa-probe.py
+    {{ ocudu_dpdk_pf_iface | quote }}
+    {{ isolated_cpus | quote }}
+  args:
+    executable: python3
+  register: ocudu_dpdk_numa_probe
+  changed_when: false
+  become: true
+
+- name: resolve fronthaul NUMA facts
+  ansible.builtin.set_fact:
+    ocudu_dpdk_numa: "{{ ocudu_dpdk_numa_probe.stdout | from_json }}"
+
+- name: report the fronthaul NUMA placement
+  ansible.builtin.debug:
+    msg: >-
+      fronthaul PF {{ ocudu_dpdk_numa.pf }} is on NUMA node
+      {{ ocudu_dpdk_numa.node }} (CPUs {{ ocudu_dpdk_numa.cpulist }});
+      isolated CPUs {{ isolated_cpus }};
+      free 1G hugepages on that node: {{ ocudu_dpdk_numa.free_1g }}
+  when: ocudu_dpdk_numa.node | int >= 0
+
+- name: fail when the isolated CPUs are not on the fronthaul NIC's NUMA node
+  ansible.builtin.fail:
+    msg: >-
+      Fronthaul NIC {{ ocudu_dpdk_numa.pf }} is on NUMA node
+      {{ ocudu_dpdk_numa.node }}, whose CPUs are {{ ocudu_dpdk_numa.cpulist }},
+      but isolated_cpus is {{ isolated_cpus }} and
+      {{ ocudu_dpdk_numa.stray | length }} of those CPUs
+      ({{ ocudu_dpdk_numa.stray | join(',') }}) are on another node. The OFH
+      timing, TX/RX and main-pool threads would run cross-socket from the
+      device they drive. Set
+      ocudu.servers[{{ server_index }}].dpdk.isolated_cpus to a range inside
+      {{ ocudu_dpdk_numa.cpulist }}, or set ocudu_dpdk_numa_strict=false to
+      accept the penalty.
+  when:
+    - ocudu_dpdk_numa.node | int >= 0
+    - ocudu_dpdk_numa.stray | length > 0
+    - ocudu_dpdk_numa_strict | bool
+
+- name: warn when the isolated CPUs are off-node and strictness is waived
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: fronthaul NIC {{ ocudu_dpdk_numa.pf }} is on NUMA node
+      {{ ocudu_dpdk_numa.node }} but isolated CPUs
+      {{ ocudu_dpdk_numa.stray | join(',') }} are not. Continuing because
+      ocudu_dpdk_numa_strict is false. Expect added fronthaul latency and
+      jitter; late U-plane frames are discarded by the RU.
+  when:
+    - ocudu_dpdk_numa.node | int >= 0
+    - ocudu_dpdk_numa.stray | length > 0
+    - not (ocudu_dpdk_numa_strict | bool)
+
+# OCUDU's own DPDK tutorial asks for 2 GB of 1 G hugepages for a single
+# 4x2 100 MHz sector. What matters here is 2 GB on the *device's* node: a
+# boot-time `hugepages=N` is spread evenly over the nodes, so the usual
+# `hugepages=2` leaves one page per node on a two-socket host.
+- name: warn when the fronthaul NUMA node is short of 1G hugepages
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: NUMA node {{ ocudu_dpdk_numa.node }} carries the fronthaul NIC
+      but has {{ ocudu_dpdk_numa.free_1g }} free 1G hugepage(s). OCUDU's DPDK
+      guide asks for 2 GB for one 4x2 100 MHz sector. Raise
+      ocudu.servers[{{ server_index }}].dpdk.hugepages so the per-node share
+      reaches 2, or allocate them per node.
+  when:
+    - ocudu_dpdk_numa.node | int >= 0
+    - ocudu_dpdk_numa.free_1g is not none
+    - ocudu_dpdk_numa.free_1g | int < 2

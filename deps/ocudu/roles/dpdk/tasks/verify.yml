@@ -17,6 +17,11 @@
         (ocudu.servers[server_index | int].dpdk | default({})).pf_iface |
         default(((ocudu.dpdk | default({})).pf_iface | default('')), true)
       }}
+    ocudu_dpdk_isolated_cpus: >-
+      {{
+        (ocudu.servers[server_index | int].dpdk | default({})).isolated_cpus |
+        default(((ocudu.dpdk | default({})).isolated_cpus | default('')), true)
+      }}
   vars:
     server_index: "{{ groups['ocudu_nodes'].index(inventory_hostname) }}"
 
@@ -29,6 +34,7 @@
   ansible.builtin.script: >-
     {{ role_path }}/files/verify-dpdk-services.sh
     --pf {{ ocudu_dpdk_pf_iface | quote }}
+    --isolated {{ ocudu_dpdk_isolated_cpus | quote }}
   register: ocudu_dpdk_verify
   changed_when: false
   become: true
