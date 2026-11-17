@@ -54,7 +54,7 @@ schema:
           properties:
             data_iface:
               type: string
-              description: Host data-plane interface for container networking
+              description: Host data-plane interface for container networking; empty uses the default-route interface
             name:
               type: string
               description: Docker network name

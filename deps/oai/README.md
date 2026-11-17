@@ -13,7 +13,7 @@ To install oai-gNB, follow these steps:
 
 1. Install Docker by running `make oai-docker-install`.
 2. Configure the network for oai-gNB:
-   - Set the "data_iface" parameter to the network interface name of the machine.
+   - Leave the "data_iface" parameter empty to use the interface carrying the machine's default route, or set it to another interface name.
    - Set "network.name" to the name of the Docker network to be created.
    - Set "network.bridge.name" to the name of the interface to be created.
    - Set "subnet", which should correspond to the "ran_subnet" of 5GC (SD-Core) or the machine's subnet.

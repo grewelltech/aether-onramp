@@ -9,12 +9,23 @@
   when: inventory_hostname in groups['gnbsim_nodes']
   become: true
 
+# This runs as its own playbook (`gnbsim-container-start`), so it resolves the
+# interface itself rather than relying on the router play's facts.
+- name: resolve gnbsim.router.data_iface
+  import_role:
+    name: preflight
+    tasks_from: ran_data_iface.yml
+  vars:
+    preflight_label: gnbsim.router.data_iface
+    preflight_ran_data_iface: "{{ gnbsim.router.data_iface | default('') }}"
+  when: inventory_hostname in groups['gnbsim_nodes']
+
 - name: create macvlan:{{ gnbsim.docker.network.macvlan.name }} network
   community.docker.docker_network:
     name: "{{ gnbsim.docker.network.macvlan.name }}"
     driver: macvlan
     driver_options:
-      parent: "{{ gnbsim.router.data_iface }}"
+      parent: "{{ ran_data_iface }}"
     ipam_config:
       - subnet: "{{ address_prefix }}.0/24"
         gateway: "{{ address_prefix }}.1"

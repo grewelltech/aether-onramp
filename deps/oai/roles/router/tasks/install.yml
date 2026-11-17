@@ -10,6 +10,18 @@
   vars:
     upf_networks_strict: false
 
+# oai.docker.network.data_iface is resolved into `ran_data_iface` and
+# `ran_data_address` (see deps/common/roles/preflight/tasks/ran_data_iface.yml):
+# an empty value means the default-route interface.
+- name: resolve oai.docker.network.data_iface
+  import_role:
+    name: preflight
+    tasks_from: ran_data_iface.yml
+  vars:
+    preflight_label: oai.docker.network.data_iface
+    preflight_ran_data_iface: "{{ oai.docker.network.data_iface | default('') }}"
+  when: inventory_hostname in groups['oai_nodes']
+
 - name: check if servers and config server length are equal
   fail:
     msg: "Mismatch in number of servers and oai nodes: {{ oai.servers|length }} vs {{ groups['oai_nodes']|length }}"
@@ -136,7 +148,7 @@
       - add
       - "{{ oai.docker.network.subnet }}"
       - via
-      - "{{ hostvars[item]['ansible_default_ipv4']['address'] }}"
+      - "{{ hostvars[item]['ran_data_address'] }}"
   with_items: "{{ play_hosts | intersect(groups['oai_nodes']) | difference(groups['master_nodes']) }}"
   when: (inventory_hostname in groups['master_nodes'])
   become: true

@@ -23,47 +23,39 @@
   become: true
   when: inventory_hostname in groups['gnbsim_nodes']
 
-- name: recover gnbsim.router.data_iface from sysctl backup file
+# The install recorded its data interface's forwarding setting in the sysctl
+# backup; when gnbsim.router.data_iface is empty, that interface is the one to
+# clean up, which the default route may no longer point at.
+- name: recover the data interface the install used from the sysctl backup file
   ansible.builtin.set_fact:
-    gnbsim: "{{ gnbsim | combine({'router': {'data_iface': (
+    gnbsim_recorded_data_iface: "{{ (
         ((router_sysctl_backup_content.content | b64decode) | regex_findall('(?m)^net\\.ipv4\\.conf\\.(.+)\\.forwarding='))
         + ((router_sysctl_backup_content.content | b64decode) | regex_findall('(?m)^net/ipv4/conf/(.+)/forwarding='))
-      ) | last | default('', true)}}, recursive=true) }}"
+      ) | last | default('', true) }}"
   when:
     - inventory_hostname in groups['gnbsim_nodes']
-    - gnbsim.router.data_iface is not defined or gnbsim.router.data_iface == ''
     - router_sysctl_backup_content.content is defined
     - (router_sysctl_backup_content.content | b64decode) is regex('(?m)^(net\\.ipv4\\.conf\\..+\\.forwarding=|net/ipv4/conf/.+/forwarding=)')
 
-- name: derive gnbsim.router.data_iface from default-route interface when unset
-  ansible.builtin.set_fact:
-    gnbsim: "{{ gnbsim | combine({'router': {'data_iface': ansible_default_ipv4.interface}}, recursive=true) }}"
-  when:
-    - inventory_hostname in groups['gnbsim_nodes']
-    - ansible_default_ipv4.interface is defined
-    - gnbsim.router.data_iface is not defined or gnbsim.router.data_iface == ''
-
-- name: warn when gnbsim.router.data_iface cannot be resolved on this host
-  ansible.builtin.debug:
-    msg: >-
-      WARNING: gnbsim.router.data_iface (={{ gnbsim.router.data_iface | default('<unset>') | to_json }})
-      is not a valid network interface on this host. Interface-specific cleanup
-      steps may be skipped; re-run with `gnbsim.router.data_iface` set explicitly
-      to fully clean up.
-  when:
-    - inventory_hostname in groups['gnbsim_nodes']
-    - (gnbsim.router.data_iface is not defined)
-      or (gnbsim.router.data_iface == '')
-      or (gnbsim.router.data_iface not in (ansible_interfaces | default([])))
+- name: resolve gnbsim.router.data_iface
+  import_role:
+    name: preflight
+    tasks_from: ran_data_iface.yml
+  vars:
+    preflight_label: gnbsim.router.data_iface
+    preflight_ran_data_iface: "{{ gnbsim.router.data_iface | default('', true) or gnbsim_recorded_data_iface | default('') }}"
+    preflight_ran_data_iface_origin: "{{ 'configured' if gnbsim.router.data_iface | default('', true) else 'recorded by the install' }}"
+    preflight_strict: false
+  when: inventory_hostname in groups['gnbsim_nodes']
 
 - set_fact:
     systemd_network_dir: /etc/systemd/network
     systemd_system_dir: /etc/systemd/system
     gnbsim_router_state_dir: /var/lib/gnbsim-router
     gnbsim_default_uplink_forwarding_state_file: /var/lib/gnbsim-router/default-uplink-forwarding
-    router_data_iface_forwarding_sysctl: "net.ipv4.conf.{{ gnbsim.router.data_iface }}.forwarding"
+    router_data_iface_forwarding_sysctl: "net.ipv4.conf.{{ ran_data_iface | default('') }}.forwarding"
     router_data_iface_forwarding_backup_regexp: >-
-      ^(net\.ipv4\.conf\.{{ gnbsim.router.data_iface | regex_escape }}\.forwarding|net/ipv4/conf/{{ gnbsim.router.data_iface | regex_escape }}/forwarding)=(.+)$
+      ^(net\.ipv4\.conf\.{{ ran_data_iface | default('') | regex_escape }}\.forwarding|net/ipv4/conf/{{ ran_data_iface | default('') | regex_escape }}/forwarding)=(.+)$
 
 - name: stop gnbsim-macvlan.service
   systemd:
@@ -113,9 +105,27 @@
       - del
       - "{{ gnbsim.router.macvlan.subnet_prefix }}.{{ lookup('ansible.utils.index_of', groups['gnbsim_nodes'], 'eq', item) }}.0/24"
       - via
-      - "{{ hostvars[item]['ansible_default_ipv4']['address'] }}"
+      - "{{ hostvars[item]['ran_data_address'] }}"
   loop: "{{ play_hosts | intersect(groups['gnbsim_nodes']) | difference(groups['master_nodes']) | list }}"
   when: inventory_hostname in groups['master_nodes']
+  become: true
+  failed_when: false
+
+# Installs before ran_data_address routed via the node's default-route address.
+- name: remove master static routes an earlier install added via the default-route address
+  command:
+    argv:
+      - /usr/sbin/ip
+      - route
+      - del
+      - "{{ gnbsim.router.macvlan.subnet_prefix }}.{{ lookup('ansible.utils.index_of', groups['gnbsim_nodes'], 'eq', item) }}.0/24"
+      - via
+      - "{{ hostvars[item]['ansible_default_ipv4']['address'] }}"
+  loop: "{{ play_hosts | intersect(groups['gnbsim_nodes']) | difference(groups['master_nodes']) | list }}"
+  when:
+    - inventory_hostname in groups['master_nodes']
+    - hostvars[item]['ansible_default_ipv4']['address'] is defined
+    - hostvars[item]['ansible_default_ipv4']['address'] != hostvars[item]['ran_data_address']
   become: true
   failed_when: false
 
@@ -222,29 +232,29 @@
   become: true
   ignore_errors: yes
 
-- name: "remove iptable rule: forward from {{ gnbsim.router.data_iface }} to gnbaccess"
+- name: "remove iptable rule: forward from {{ ran_data_iface }} to gnbaccess"
   iptables:
     chain: FORWARD
-    in_interface: "{{ gnbsim.router.data_iface }}"
+    in_interface: "{{ ran_data_iface }}"
     out_interface: "gnbaccess"
     jump: ACCEPT
     state: absent
   when:
     - inventory_hostname in groups['gnbsim_nodes']
-    - (gnbsim.router.data_iface | default('') | trim) != ''
+    - (ran_data_iface | default('') | trim) != ''
   become: true
   ignore_errors: yes
 
-- name: "delete iptable rule: forward from gnbaccess to {{ gnbsim.router.data_iface }}"
+- name: "delete iptable rule: forward from gnbaccess to {{ ran_data_iface }}"
   iptables:
     chain: FORWARD
     in_interface: "gnbaccess"
-    out_interface: "{{ gnbsim.router.data_iface }}"
+    out_interface: "{{ ran_data_iface }}"
     jump: ACCEPT
     state: absent
   when:
     - inventory_hostname in groups['gnbsim_nodes']
-    - (gnbsim.router.data_iface | default('') | trim) != ''
+    - (ran_data_iface | default('') | trim) != ''
   become: true
   ignore_errors: yes
 
@@ -329,22 +339,22 @@
   become: true
   ignore_errors: yes
 
-- name: read {{ gnbsim.router.data_iface }} networkctl status
+- name: read {{ ran_data_iface }} networkctl status
   command:
     argv:
       - networkctl
       - status
-      - "{{ gnbsim.router.data_iface }}"
+      - "{{ ran_data_iface }}"
   register: data_iface_networkctl_status
   changed_when: false
   failed_when: false
   when:
     - inventory_hostname in groups['gnbsim_nodes']
-    - (gnbsim.router.data_iface | default('') | trim) != ''
+    - (ran_data_iface | default('') | trim) != ''
   become: true
   ignore_errors: yes
 
-- name: derive {{ gnbsim.router.data_iface }}'s active systemd-networkd file via networkctl
+- name: derive {{ ran_data_iface }}'s active systemd-networkd file via networkctl
   set_fact:
     data_iface_network_file_networkctl: >-
       {{
@@ -361,14 +371,14 @@
     - inventory_hostname in groups['gnbsim_nodes']
   ignore_errors: yes
 
-- name: find {{ gnbsim.router.data_iface }}'s systemd-networkd file by filename
+- name: find {{ ran_data_iface }}'s systemd-networkd file by filename
   find:
     paths:
       - /etc/systemd/network
       - /run/systemd/network
       - /lib/systemd/network
       - /usr/lib/systemd/network
-    patterns: "*{{ gnbsim.router.data_iface }}.network"
+    patterns: "*{{ ran_data_iface }}.network"
     recurse: false
     file_type: file
   register: data_iface_network_file_matches
@@ -376,12 +386,12 @@
   failed_when: false
   when:
     - inventory_hostname in groups['gnbsim_nodes']
-    - (gnbsim.router.data_iface | default('') | trim) != ''
+    - (ran_data_iface | default('') | trim) != ''
     - (data_iface_network_file_networkctl | default('') | trim) == ''
   become: true
   ignore_errors: yes
 
-- name: derive {{ gnbsim.router.data_iface }}'s systemd-networkd file by filename
+- name: derive {{ ran_data_iface }}'s systemd-networkd file by filename
   set_fact:
     data_iface_network_file_cmd: >-
       {{
@@ -398,7 +408,7 @@
     - (data_iface_network_file_networkctl | default('') | trim) == ''
   ignore_errors: yes
 
-- name: set {{ gnbsim.router.data_iface }}'s systemd-networkd filename
+- name: set {{ ran_data_iface }}'s systemd-networkd filename
   set_fact:
     data_iface_network_filename: >-
       {{
@@ -561,7 +571,7 @@
   when:
     - inventory_hostname in groups['gnbsim_nodes']
     - router_sysctl_backup_content.content is defined
-    - (gnbsim.router.data_iface | default('') | trim) != ''
+    - (ran_data_iface | default('') | trim) != ''
     - (saved_net_ipv4_conf_iface_forwarding | default('')) == ''
   become: true
   ignore_errors: yes
@@ -575,7 +585,7 @@
   when:
     - inventory_hostname in groups['gnbsim_nodes']
     - router_sysctl_backup_content.content is defined
-    - (gnbsim.router.data_iface | default('') | trim) != ''
+    - (ran_data_iface | default('') | trim) != ''
     - (saved_net_ipv4_conf_iface_forwarding | default('')) == ''
   become: true
   ignore_errors: yes
