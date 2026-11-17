@@ -1,13 +1,13 @@
 mcc: '001'          # Mobile Country Code value
 mnc: '01'           # Mobile Network Code value (2 or 3 digits)
 
-nci: '0x000000010'  # NR Cell Identity (36-bit)
+nci: '{{ ueransim.servers[server_index | int].nci | default('0x000000010') }}'  # NR Cell Identity (36-bit)
 idLength: 32        # NR gNB ID length in bits [22...32]
 tac: 1              # Tracking Area Code
 
-linkIp: {{ ueransim.gnb.ip }}   # gNB's local IP address for Radio Link Simulation (Usually same with local IP)
-ngapIp: {{ ueransim.gnb.ip }}   # gNB's local IP address for N2 Interface (Usually same with local IP)
-gtpIp: {{ ueransim.gnb.ip }}    # gNB's local IP address for N3 Interface (Usually same with local IP)
+linkIp: {{ ueransim.servers[server_index | int].link_ip | default(ueransim.gnb.ip) }}   # gNB's local IP address for Radio Link Simulation (Usually same with local IP)
+ngapIp: {{ ueransim.servers[server_index | int].ngap_ip | default(ueransim.gnb.ip) }}   # gNB's local IP address for N2 Interface (Usually same with local IP)
+gtpIp: {{ ueransim.servers[server_index | int].gtp_ip | default(ueransim.gnb.ip) }}    # gNB's local IP address for N3 Interface (Usually same with local IP)
 
 # List of AMF address information
 amfConfigs:
