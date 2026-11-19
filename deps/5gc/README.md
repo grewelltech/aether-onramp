@@ -118,17 +118,16 @@ different interface, for example `eno1`, name it for both networks:
 ```yaml
 core:
   networks:
-    access:
-      iface: eno1
-    core:
-      iface: eno1
+    access: { iface: eno1 }
+    core: { iface: eno1 }
 ```
 
 The addresses, the routing and the NAT stay as in the default, now on `eno1`.
-If `eno1` does not carry the default route, two things follow: a `ran_subnet`
-left empty is taken from `eno1`'s own subnet, and UE traffic is NATed on both
-`eno1` and the default-route interface, leaving by whichever one the server's
-routing table picks.
+Keep the shipped `ran_subnet: "172.20.0.0/16"` under `access` if you run
+gNBsim; for gNBs on `eno1`'s own LAN, leave it out. If `eno1` does not carry
+the default route, a `ran_subnet` left empty is taken from `eno1`'s own subnet,
+and UE traffic is NATed on both `eno1` and the default-route interface, leaving
+by whichever one the server's routing table picks.
 
 To change one side only, name just that side. For example, suppose the server has a
 second NIC, `eno2`, cabled to a site router at `10.60.0.1` that leads to the
